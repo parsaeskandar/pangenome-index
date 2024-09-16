@@ -1,0 +1,8 @@
+//
+// Created by seeskand on 9/16/24.
+//
+
+#ifndef PANGENOME_INDEX_ALGORITHM_HPP
+#define PANGENOME_INDEX_ALGORITHM_HPP
+
+#endif //PANGENOME_INDEX_ALGORITHM_HPP
