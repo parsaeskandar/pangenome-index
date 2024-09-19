@@ -19,7 +19,7 @@ void TagArray::load_bptree(BplusTree <Run> &bptree, size_t bwt_size) {
     // have to iterate over the bptree and add the runs to the encoded_runs vector and the bit-vectors
     auto number_of_runs = bptree.get_bpt_run_count();
     encoded_runs_starts = sdsl::bit_vector(7 * number_of_runs, 0);
-    sdsl::sd_vector_builder builder(bwt_size + 1, number_of_runs);
+    sdsl::sd_vector_builder builder(bwt_size + 1 , number_of_runs);
     size_t encoded_runs_current_size = 0;
 
 

@@ -9,7 +9,7 @@ MY_CXX := clang++
 OMP_HOMEBREW_PREFIX := /opt/homebrew/Cellar/libomp/18.1.8
 
 PARALLEL_FLAGS=-fopenmp -pthread
-LIBS=-L$(LIB_DIR) -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lrindex
+LIBS=-L$(LIB_DIR) -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64
 
 
 # Apple Clang does not support OpenMP directly, so we need special handling.
@@ -40,16 +40,16 @@ ifeq ($(shell uname -s), Darwin)
     endif
 endif
 
-CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -I$(PWD)/include/r-index/internal -Ideps/vg
+CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg
 
 
 HEADERS=$(wildcard include/pangenome_index/*.hpp)
 
-LIBOBJS=$(addprefix $(BUILD_OBJ)/,bplus_tree.o tag_arrays.o unique_kmer.o)
+LIBOBJS=$(addprefix $(BUILD_OBJ)/,bplus_tree.o tag_arrays.o unique_kmer.o algorithm.o)
 LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-PROGRAMS=$(addprefix $(BUILD_BIN)/,build_panindex)
+PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags)
 
 
 .PHONY: all clean directories test
