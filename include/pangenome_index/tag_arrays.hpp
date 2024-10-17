@@ -21,30 +21,32 @@
 using namespace std;
 using handlegraph::pos_t;
 
+namespace panindexer {
 
-class TagArray {
-public:
-    TagArray();
+
+    class TagArray {
+    public:
+        TagArray();
 
 //    void TagArray::add_run(size_t offset, bool is_reverse, int length, size_t node_id);
 
-    void load_bptree(BplusTree<Run> &bptree, size_t bwt_size);
+        void load_bptree(BplusTree<Run> &bptree, size_t bwt_size);
 
-    void serialize(std::ostream &out);
+        void serialize(std::ostream &out);
 
-    void load(std::istream &in);
+        void load(std::istream &in);
 
-    void query(size_t start, size_t end);
+        void query(size_t start, size_t end);
 
-private:
+    private:
 
-    std::vector <gbwt::byte_type> encoded_runs;
-    sdsl::bit_vector encoded_runs_starts;
-    sdsl::sd_vector<> bwt_intervals;
+        std::vector <gbwt::byte_type> encoded_runs;
+        sdsl::bit_vector encoded_runs_starts;
+        sdsl::sd_vector<> bwt_intervals;
 
-    sdsl::bit_vector::select_1_type encoded_runs_starts_select;
-    sdsl::sd_vector<>::rank_1_type bwt_intervals_rank;
-};
+        sdsl::bit_vector::select_1_type encoded_runs_starts_select;
+        sdsl::sd_vector<>::rank_1_type bwt_intervals_rank;
+    };
 
-
+}
 #endif //PANGENOME_INDEX_TAG_ARRAYS_HPP

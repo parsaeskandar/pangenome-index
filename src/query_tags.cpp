@@ -27,6 +27,7 @@
 using namespace std;
 using namespace ri;
 using namespace gbwtgraph;
+using namespace panindexer;
 
 
 std::vector<std::string> readSequencesFromFile(const std::string &filename) {

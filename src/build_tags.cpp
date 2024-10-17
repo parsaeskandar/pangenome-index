@@ -16,22 +16,27 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include "../deps/grlBWT/scripts/fm_index.h"
+#include "../deps/grlBWT/include/bwt_io.h"
+#include "pangenome_index/r-index.hpp"
 
 
 #define TIME 1
 
 using namespace std;
 using namespace ri;
-using namespace gbwtgraph;
+using namespace panindexer;
 
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        std::cout << "usage: ... " << std::endl;
-        exit(0);
-    }
+//    if (argc != 3) {
+//        std::cout << "usage: ... " << std::endl;
+//        exit(0);
+//    }
     std::string graph_file = std::string(argv[1]);
     std::string index_file = std::string(argv[2]);
+    std::string rlbwt_file = std::string(argv[3]);
+
     int threads = 8;
     size_t k = 31;
 
@@ -43,6 +48,94 @@ int main(int argc, char **argv) {
     in.read((char *) &fast, sizeof(fast));
     r_index<> idx;
     idx.load(in);
+
+
+//    std::cerr<<"Computing the FM-index from the input BCR BWT"<<std::endl;
+//    fm_index fmi(rlbwt_file);
+
+    bwt_buff_reader bwt_buff(rlbwt_file);
+    cerr << "Runs " << bwt_buff.size() << endl;
+
+    fm_index fmi(rlbwt_file);
+
+
+    cerr << fmi.lf(0).first << " " << fmi.lf(0).second << endl;
+    cerr << fmi.lf(1).first << " " << fmi.lf(1).second << endl;
+    cerr << fmi.lf(2).first << " " << fmi.lf(2).second << endl;
+    cerr << fmi.lf(3).first << " " << fmi.lf(3).second << endl;
+
+    cerr << fmi.C[0] << " " << fmi.C[1] << " " << fmi.C[2] << " " << fmi.C[3] << endl;
+//    cerr << fmi.sym_map['A'] << " " << fmi.sym_map['C'] << " " << fmi.sym_map['G'] << " " << fmi.sym_map['T'] << endl;
+    cerr << fmi.bwt[0] << " " << fmi.bwt[1] << " " << fmi.bwt[2] << " " << fmi.bwt[3] << endl;
+
+    // print stuff in fmi.sym_map
+    for (size_t i = 0; i < 256; i++){
+        if (fmi.sym_map[i] != 0){
+            cerr << i << " " << fmi.sym_map[i] << endl;
+        }
+    }
+
+
+    size_t symb = 'A';
+    cerr << fmi.bwt << endl;
+
+
+    FastLocate r_index(rlbwt_file);
+
+
+
+    // checking the backward navigation psi
+    cerr << "PSI " << r_index.psi(0) << endl;
+    cerr << "PSI " << r_index.psi(1) << endl;
+    cerr << "PSI " << r_index.psi(2) << endl;
+    cerr << "PSI " << r_index.psi(3) << endl;
+    cerr << "PSI " << r_index.psi(4) << endl;
+
+
+
+    cerr << " 5 " << r_index.locateNext(5) << endl;
+    cerr << " 6 " << r_index.locateNext(6) << endl;
+    cerr << " 7 " << r_index.locateNext(7) << endl;
+    cerr << " 8 " << r_index.locateNext(8) << endl;
+    cerr << " 9 " << r_index.locateNext(9) << endl;
+    cerr << " 10 " << r_index.locateNext(10) << endl;
+    cerr << " 11 " << r_index.locateNext(11) << endl;
+    cerr << " 12 " << r_index.locateNext(12) << endl;
+    cerr << " 13 " << r_index.locateNext(13) << endl;
+    cerr << " 14 " << r_index.locateNext(14) << endl;
+
+
+
+
+    gbwt::range_type run(5, 10);
+    size_t run_id = 0;
+    bool starts_with_to = false;
+    size_t first_run = 0;
+//    size_t symb = 'G';
+
+
+
+    auto temp = r_index.LF(run, symb, starts_with_to, first_run);
+    cerr << "TEMP " << temp.first << " " << temp.second << endl;
+
+
+    std::vector <size_type> res = r_index.locate(run);
+
+    // print all the res
+    for (size_t i = 0; i < res.size(); i++){
+        cerr << res[i] << " ";
+    }
+
+
+    auto x = r_index.decompressDA();
+    cerr << "DA " << x.size() << endl;
+    for (size_t i = 0; i < x.size(); i++){
+        cerr << x[i] << " ";
+    }
+
+    cerr << r_index.tot_strings() << endl;
+
+    exit(0);
 
 
     GBZ gbz;
@@ -75,7 +168,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    BplusTree<Run> bptree(15); // TODO: determine the BPlusTree degree
+    BplusTree<panindexer::Run> bptree(15); // TODO: determine the BPlusTree degree
 
 //
 //
@@ -106,12 +199,12 @@ int main(int argc, char **argv) {
     cerr << "calculating the fraction of the tag arrays covered" << endl;
     // calculating the fraction of the tag arrays covered
     for (auto it = bptree.begin(); it != bptree.end(); ++it) {
-        Run current_item = *it;
+        panindexer::Run current_item = *it;
         if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
             auto next_it = it;
             ++next_it; // Move to the next element
             if (next_it != bptree.end()) { // Check if the next element is not the end
-                Run next_item = *next_it; // Get the next item
+                panindexer::Run next_item = *next_it; // Get the next item
                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
             }
         }
@@ -142,12 +235,12 @@ int main(int argc, char **argv) {
     cerr << "calculating the fraction of the tag arrays covered after one extension" << endl;
     // calculating the fraction of the tag arrays covered
     for (auto it = bptree.begin(); it != bptree.end(); ++it) {
-        Run current_item = *it;
+        panindexer::Run current_item = *it;
         if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
             auto next_it = it;
             ++next_it; // Move to the next element
             if (next_it != bptree.end()) { // Check if the next element is not the end
-                Run next_item = *next_it; // Get the next item
+                panindexer::Run next_item = *next_it; // Get the next item
                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
 //                cerr << "The current item is: " << current_item << " NEXT " << next_item << endl;
 //                if (next_item.start_position - current_item.start_position > 500){
@@ -190,12 +283,12 @@ int main(int argc, char **argv) {
     cerr << "calculating the fraction of the tag arrays covered " << endl;
     // calculating the fraction of the tag arrays covered
     for (auto it = bptree.begin(); it != bptree.end(); ++it) {
-        Run current_item = *it;
+        panindexer::Run current_item = *it;
         if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
             auto next_it = it;
             ++next_it; // Move to the next element
             if (next_it != bptree.end()) { // Check if the next element is not the end
-                Run next_item = *next_it; // Get the next item
+                panindexer::Run next_item = *next_it; // Get the next item
                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
                 // print the decoded items of current_item and next item
                 pos_t t1 = current_item.graph_position.decode();

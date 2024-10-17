@@ -6,7 +6,6 @@
 #define PANGENOME_INDEX_ALGORITHM_HPP
 
 
-
 #include <vector>
 #include <queue>
 #include <mutex>
@@ -18,118 +17,65 @@
 #include "gbwtgraph/gbz.h"
 #include <hash_map.hpp>
 
-//
+
 using namespace std;
 using namespace ri;
 using namespace gbwtgraph;
-//
-//// Function to sort the end_of_seq vector by the second element of each pair
-//vector<pair<uint64_t, uint64_t>> sort_end_of_seq(vector<pair<uint64_t, uint64_t>> &OCC);
-//
-//// Thread-safe queue implementation
-//template<typename T>
-//class ThreadSafeQueue {
-//public:
-//    // Push item to the queue
-//    void push(const T &item);
-//
-//    // Try to pop item from the queue, return true if successful
-//    bool try_pop(T &item);
-//
-//private:
-//    std::queue<T> queue_;
-//    std::mutex mutex_;
-//    std::condition_variable cond_var_;
-//};
-//
-//// Worker function for converting kmers to B+ tree nodes
-//void kmers_to_bplustree_worker(r_index<> &idx, ThreadSafeQueue<std::pair<Run, size_t>> &queue,
-//hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
-//range_t interval, const string &current_kmer);
-//
-//// Parallel function to process kmers and insert them into a B+ tree
-//void parallel_kmers_to_bplustree(r_index<> &idx, BplusTree<Run> &bptree,
-//                                 hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
-//                                 range_t interval);
-//
-//// Template function implementations
-//template<typename T>
-//void ThreadSafeQueue<T>::push(const T &item) {
-//    std::unique_lock<std::mutex> lock(mutex_);
-//    queue_.push(item);
-//    lock.unlock();
-//    cond_var_.notify_one();
-//}
-//
-//template<typename T>
-//bool ThreadSafeQueue<T>::try_pop(T &item) {
-//    std::unique_lock<std::mutex> lock(mutex_);
-//    if (queue_.empty()) {
-//        return false;
-//    }
-//    item = queue_.front();
-//    queue_.pop();
-//    return true;
-//}
-//
-//vector<pair<Run, size_t> > extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptree, int batch_size);
-//
-//void traverse_sequences_parallel(GBZ &gbz, BplusTree<Run> &bptree, r_index<> &idx,
-//                                 vector<pair<uint64_t, uint64_t>> &end_of_seq);
-//
 
-template<typename T>
-class ThreadSafeQueue {
-public:
-    // Push item to the queue
-    void push(const T &item);
 
-    // Try to pop item from the queue, return true if successful
-    bool try_pop(T &item);
+namespace panindexer {
 
-private:
-    std::queue<T> queue_;
-    std::mutex mutex_;
-    std::condition_variable cond_var_;
-};
 
-template<typename T>
-void ThreadSafeQueue<T>::push(const T &item) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    queue_.push(item);
-    lock.unlock();
-    cond_var_.notify_one();
-}
+    template<typename T>
+    class ThreadSafeQueue {
+    public:
+        // Push item to the queue
+        void push(const T &item);
 
-template<typename T>
-bool ThreadSafeQueue<T>::try_pop(T &item) {
-    std::unique_lock<std::mutex> lock(mutex_);
-    if (queue_.empty()) {
-        return false;
+        // Try to pop item from the queue, return true if successful
+        bool try_pop(T &item);
+
+    private:
+        std::queue <T> queue_;
+        std::mutex mutex_;
+        std::condition_variable cond_var_;
+    };
+
+    template<typename T>
+    void ThreadSafeQueue<T>::push(const T &item) {
+        std::unique_lock <std::mutex> lock(mutex_);
+        queue_.push(item);
+        lock.unlock();
+        cond_var_.notify_one();
     }
-    item = queue_.front();
-    queue_.pop();
-    return true;
-}
+
+    template<typename T>
+    bool ThreadSafeQueue<T>::try_pop(T &item) {
+        std::unique_lock <std::mutex> lock(mutex_);
+        if (queue_.empty()) {
+            return false;
+        }
+        item = queue_.front();
+        queue_.pop();
+        return true;
+    }
+
 // This function input is the OCC vector of the end of the sequences (#) and it returns the sorted end_of_seq vector
 // which is the sorted vector of pairs (i, SA[i]) for the end of each sequence which is (ISA[j], j)
-vector<pair<uint64_t, uint64_t>> sort_end_of_seq(vector<pair<uint64_t, uint64_t> > &OCC) {
+    vector <pair<uint64_t, uint64_t>> sort_end_of_seq(vector <pair<uint64_t, uint64_t>> &OCC) {
 
-    // Sort the end_of_seq vector by the second element of each pair
-    sort(OCC.begin(), OCC.end(),
-         [](const pair<uint64_t, uint64_t> &a, const pair<uint64_t, uint64_t> &b) {
-             return a.second < b.second;
-         });
+        // Sort the end_of_seq vector by the second element of each pair
+        sort(OCC.begin(), OCC.end(),
+             [](const pair <uint64_t, uint64_t> &a, const pair <uint64_t, uint64_t> &b) {
+                 return a.second < b.second;
+             });
 
-    return OCC;
-}
+        return OCC;
+    }
 
-
-
-
-void kmers_to_bplustree_worker(r_index<> &idx, ThreadSafeQueue<std::pair<Run, size_t>> &queue,
-                               hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
-                               range_t interval, const string &current_kmer) {
+void kmers_to_bplustree_worker(r_index<> &idx, ThreadSafeQueue<std::pair < Run, size_t>> &queue,
+                                   hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
+                                   size_t k, range_t interval, const string &current_kmer) {
     if (current_kmer.length() == k && interval.first <= interval.second) {
 
         // creating the kmer with the key type
@@ -138,23 +84,23 @@ void kmers_to_bplustree_worker(r_index<> &idx, ThreadSafeQueue<std::pair<Run, si
         auto it = index.find(kmer_key.get_key());
         if (it != index.end()) {
             Run run = {interval.first, it->second};
-            queue.push({run, interval.second - interval.first + 1});
+            queue.push( {run, interval.second - interval.first + 1});
         }
         return;
     }
 
-    for (char base: {'A', 'C', 'G', 'T'}) {
+    for ( char base : {'A', 'C', 'G', 'T'}) {
         if (interval.first <= interval.second) {
             kmers_to_bplustree_worker(idx, queue, index, k, idx.LF(interval, base), base + current_kmer);
         }
     }
 }
 
-void parallel_kmers_to_bplustree(r_index<> &idx, BplusTree<Run> &bptree,
-                                 hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
+void parallel_kmers_to_bplustree(r_index<> &idx, BplusTree <Run> &bptree,
+                                 hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
                                  range_t interval) {
     // Thread-safe queue to collect results
-    ThreadSafeQueue<std::pair<Run, size_t>> queue;
+    ThreadSafeQueue <std::pair<Run, size_t>> queue;
 
     // number of threads
     int threads = omp_get_max_threads();
@@ -172,19 +118,19 @@ void parallel_kmers_to_bplustree(r_index<> &idx, BplusTree<Run> &bptree,
     }
 
     // Single-threaded insertion into BPlusTree
-    std::pair<Run, size_t> result;
+    std::pair <Run, size_t> result;
     while (queue.try_pop(result)) {
         bptree.insert(result.first, result.second);
     }
 }
 
-vector<pair<Run, size_t> >
-extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptree, int batch_size) {
-    vector<pair<Run, size_t> > extension_candidates;
+vector <pair<Run, size_t>>
+extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree <Run> &bptree, int batch_size) {
+    vector <pair<Run, size_t>> extension_candidates;
 
     int num_threads = omp_get_max_threads();
-    vector<std::queue<pair<Run, size_t> >> bfs_queues(num_threads);
-    vector<vector<pair<Run, size_t>>> batches(num_threads);
+    vector < std::queue < pair < Run, size_t > >> bfs_queues(num_threads);
+    vector < vector < pair < Run, size_t>>> batches(num_threads);
 
     // Mutex for synchronizing access to bptree
     std::mutex bptree_mutex;
@@ -209,7 +155,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptr
     {
         int thread_num = omp_get_thread_num();
         while (!bfs_queues[thread_num].empty()) {
-            pair<Run, size_t> current_pair = bfs_queues[thread_num].front();
+            pair <Run, size_t> current_pair = bfs_queues[thread_num].front();
             bfs_queues[thread_num].pop();
 
             Run current_item = current_pair.first;
@@ -242,7 +188,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptr
                             batches[thread_num].push_back(make_pair(temp_run, new_range.second - new_range.first + 1));
 
                             if (batches[thread_num].size() >= batch_size) {
-                                std::lock_guard<std::mutex> lock(bptree_mutex);
+                                std::lock_guard <std::mutex> lock(bptree_mutex);
                                 for (const auto &item: batches[thread_num]) {
 //                                    bptree.insert(item.first, item.second);
 //                                    bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
@@ -277,7 +223,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptr
                                 batches[thread_num].push_back({new_run, new_range.second - new_range.first + 1});
 
                                 if (batches[thread_num].size() >= batch_size) {
-                                    std::lock_guard<std::mutex> lock(bptree_mutex);
+                                    std::lock_guard <std::mutex> lock(bptree_mutex);
                                     for (const auto &item: batches[thread_num]) {
 //                                        bptree.insert(item.first, item.second);
 //                                        bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
@@ -297,7 +243,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptr
 
         // Process remaining items in the local batch
         if (!batches[thread_num].empty()) {
-            std::lock_guard<std::mutex> lock(bptree_mutex);
+            std::lock_guard <std::mutex> lock(bptree_mutex);
             for (const auto &item: batches[thread_num]) {
 //                bptree.insert(item.first, item.second);
 //                bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
@@ -313,14 +259,14 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, r_index<> &idx, BplusTree<Run> &bptr
 }
 
 
-void traverse_sequences_parallel(GBZ &gbz, BplusTree<Run> &bptree, r_index<> &idx,
-                                 vector<pair<uint64_t, uint64_t>> &end_of_seq) {
+void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, r_index<> &idx,
+                                 vector <pair<uint64_t, uint64_t>> &end_of_seq) {
     auto number_of_sequences = end_of_seq.size();
     int traverse = 0;
 
     vector<int> tmp;
 
-    vector<Run> tmp1;
+    vector <Run> tmp1;
     omp_lock_t lock;
     omp_init_lock(&lock);
 
@@ -338,7 +284,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree<Run> &bptree, r_index<> &id
         auto current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
         auto in_node_index = gbz.graph.get_length(current_node) - 1;
 
-        vector<Run> local_tmp1;
+        vector <Run> local_tmp1;
 
         // traversing the RLBWT of a sequence
         while (true) {
@@ -410,6 +356,8 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree<Run> &bptree, r_index<> &id
     }
 
     omp_destroy_lock(&lock);
+}
+
 }
 
 #endif //PANGENOME_INDEX_ALGORITHM_HPP

@@ -9,7 +9,7 @@ MY_CXX := clang++
 OMP_HOMEBREW_PREFIX := /opt/homebrew/Cellar/libomp/18.1.8
 
 PARALLEL_FLAGS=-fopenmp -pthread
-LIBS=-L$(LIB_DIR) -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt
+LIBS=-L$(LIB_DIR) -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt -lgtest -lgtest_main
 
 
 # Apple Clang does not support OpenMP directly, so we need special handling.
@@ -40,45 +40,34 @@ ifeq ($(shell uname -s), Darwin)
     endif
 endif
 
-CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg -Ideps/grlBWT/include
+CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -I../lib -I../deps/r-index/internal -I../deps/vg -I../deps/grlBWT/include
 
 
-HEADERS=$(wildcard include/pangenome_index/*.hpp)
+HEADERS=$(wildcard ../include/pangenome_index/*.hpp)
 
-LIBOBJS=$(addprefix $(BUILD_OBJ)/,tag_arrays.o r-index.o)
-LIBRARY=$(BUILD_LIB)/libpanindexer.a
-
-
-PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags)
+#LIBOBJS=$(addprefix $(BUILD_OBJ)/,tag_arrays.o r-index.o)
+#LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-.PHONY: all clean directories test
-all: directories $(LIBRARY) $(PROGRAMS)
+PROGRAMS=test_rindex
+
+LIBRARY=../lib/libpanindexer.a
+
+.PHONY: all clean test
+all:$(PROGRAMS)
 
 directories: $(BUILD_BIN) $(BUILD_LIB) $(BUILD_OBJ)
 
-$(BUILD_BIN):
-	mkdir -p $@
 
-$(BUILD_LIB):
-	mkdir -p $@
+%.o:%.cpp $(HEADERS)
+	$(MY_CXX) $(CXX_FLAGS) -c $<
 
-$(BUILD_OBJ):
-	mkdir -p $@
+$(PROGRAMS):%:%.o $(LIBRARY)
+	$(MY_CXX) $(CXX_FLAGS) -o $@ $< $(LIBRARY) $(LIBS)
 
-$(BUILD_OBJ)/%.o:$(SOURCE_DIR)/%.cpp $(HEADERS)
-	$(MY_CXX) $(CPPFLAGS) $(CXXFLAGS) $(CXX_FLAGS) -c -o $@ $<
 
-$(LIBRARY):$(LIBOBJS)
-	ar rcs $@ $(LIBOBJS)
-
-$(BUILD_BIN)/%:$(BUILD_OBJ)/%.o $(LIBRARY)
-	$(MY_CXX) $(LDFLAGS) $(CPPFLAGS) $(CXXFLAGS) $(CXX_FLAGS) -o $@ $< $(LIBRARY) $(LIBS)
-
-test:$(LIBRARY)
-	cd tests && $(MAKE) test
+test:$(PROGRAMS)
+	$(foreach PROG,$(PROGRAMS),./$(PROG) || exit 1;)
 
 clean:
-	rm -rf $(BUILD_BIN) $(BUILD_LIB) $(BUILD_OBJ)
-	rm -f *.o *.a $(OBSOLETE)
-	#cd tests && $(MAKE) clean
+	rm -f $(PROGRAMS) *.o

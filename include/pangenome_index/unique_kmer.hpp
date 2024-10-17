@@ -18,7 +18,7 @@
 #include <hash_map.hpp>
 
 
-namespace gbwtgraph {
+namespace panindexer {
     using namespace std;
     using handlegraph::pos_t;
 
