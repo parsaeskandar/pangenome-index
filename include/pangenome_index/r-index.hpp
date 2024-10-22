@@ -104,6 +104,92 @@ namespace panindexer {
             bool get(std::uint64_t flag) const { return (this->flags & flag); }
         };
 
+
+
+        struct Run_blocks{
+
+            // store the cumulative number of each character till this block
+            // characters map to 0-64 range with sym_map in the main class
+            sdsl::int_vector<64> character_cum_ranks; // TODO: maybe can change this to lower than 64
+
+            // store the runs in this block, there are k runs in each block. The first element in the pair is the run symbol,
+            // and the second element is the run length
+            std::vector<std::pair<size_t, size_t>> runs;
+
+            Run_blocks() : character_cum_ranks(8) {};
+
+
+            void set_runs(std::vector<std::pair<size_t, size_t>> &source){
+                this->runs = source;
+            }
+
+            void set_character_cum_ranks(std::vector<size_t> &source){
+                this->character_cum_ranks.resize(source.size());
+                for(size_t i=0;i<this->character_cum_ranks.size();i++){
+                    this->character_cum_ranks[i] = source[i];
+                }
+            }
+
+
+
+            // return the symbol rank at the position pos in the block
+            size_t rankAt(size_t pos, size_t symbol, size_t& run_num, size_t& current_position) const {
+                size_t rank = 0;
+
+                run_num = 0; // starting from the 0th run
+
+                while (run_num < this->runs.size()) {
+                    if (this->runs[run_num].first == symbol) {
+                        if (current_position + this->runs[run_num].second > pos) {
+                            rank += (pos - current_position + 1);
+                            break;
+                        } else {
+                            rank += this->runs[run_num].second;
+                        }
+                    }
+
+                    current_position += this->runs[run_num].second;
+                    run_num++;
+
+                    if(current_position > pos){
+                        break;
+                    }
+                }
+
+
+                return rank;
+
+            }
+
+            size_t bwt_char_at(size_t pos){
+                size_t sym, freq;
+                size_t offset = 0;
+                for (size_t i = 0; i < this->runs.size(); i++) {
+                    offset += this->runs[i].second;
+                    if (offset > pos) {
+                        return this->runs[i].first;
+                    }
+                }
+                return 0;
+            }
+
+
+            void print(){
+                std::cerr << "Runs " << std::endl;
+                for(size_t i=0;i<this->runs.size();i++){
+                    std::cerr << this->runs[i].first << " " << this->runs[i].second << std::endl;
+                }
+
+                std::cerr << "Character Cumulative Ranks " << std::endl;
+                for(size_t i=0;i<8;i++){
+                    std::cerr << this->character_cum_ranks[i] << std::endl;
+                }
+            }
+
+            sdsl::int_vector<64> get_cum_ranks() const { return this->character_cum_ranks;}
+
+        };
+
 //------------------------------------------------------------------------------
 
 
@@ -111,14 +197,19 @@ namespace panindexer {
 
         bwt_buff_reader *buff_reader;
 
-
-
-
         // store the mapping of the symbols to the 0-255 range
         sdsl::int_vector<8> sym_map;
 
         // store the number of each character in the whole BWT. For example the C[sym_map['A']] gives the total number of As in the whole text
         sdsl::int_vector<64> C;
+
+        size_t block_size = 3;
+
+        // store the run blocks, each containing block_size runs
+        std::vector<Run_blocks> blocks;
+
+        // store the start BWT position of each block in blocks
+        sdsl::sd_vector<> blocks_start_pos;
 
         // store the size of the whole text
         size_t sequence_size;
@@ -134,7 +225,7 @@ namespace panindexer {
         // If last[i] = 1, last_to_run[last_rank(i)] is the identifier of the run.
         sdsl::int_vector<0> last_to_run;
 
-        // Run identifier of the first run in each node.
+        // Run identifier of the first run in each block.
         sdsl::int_vector<0> comp_to_run;
 
 //------------------------------------------------------------------------------
@@ -142,10 +233,10 @@ namespace panindexer {
         /*
           Low-level interface: Statistics.
 //        */
-//
+
+        // returning the number of runs in the BWT
         size_type size() const { return this->samples.size(); }
-//        bool empty() const { return (this->size() == 0); }
-//
+        bool empty() const { return (this->size() == 0); }
 ////------------------------------------------------------------------------------
 //
 //        /*
@@ -161,6 +252,11 @@ namespace panindexer {
 //        SearchState find(Iterator begin, Iterator end, size_type& first) const;
 //
         gbwt::range_type extend(gbwt::range_type state, size_t sym, size_type& first) const;
+
+        gbwt::range_type extend(gbwt::range_type state, size_t sym) const{
+            size_type first = NO_POSITION;
+            return this->extend(state, sym, first);
+        };
 
 //        template<class Iterator>
 //        gbwt::range_type extend(gbwt::range_type state, Iterator begin, Iterator end, size_type& first) const;
@@ -199,7 +295,7 @@ namespace panindexer {
 
 
 
-        // This function calculate C and the sym_map from the buff_reader TODO: CHECK THIS
+        // This function calculate C and the sym_map from the buff_reader
         void calculate_C(){
             this->sequence_size = 0;
             uint8_t buffer[1024]={0};
@@ -257,12 +353,64 @@ namespace panindexer {
 
         gbwt::range_type LF(gbwt::range_type range, size_t sym, bool& starts_with_to, size_t& first_run) const;
 
+        gbwt::range_type LF(gbwt::range_type range, size_t sym) const{
+            bool starts_with_to = false;
+            size_t first_run = NO_POSITION;
+            return this->LF(range, sym, starts_with_to, first_run);
+        };
+
+
+        // just the backward navigation
+        size_t LF(size_t idx) {
+            return this->psi(idx).second;
+
+        }
+
+        // This function returns pairs (i, SA[i]) for the end of sequences
+        std::vector < std::pair<uint64_t, uint64_t>> OCC(){
+            std::vector <std::pair<uint64_t, uint64_t>> occ;
+            auto prev = this->locateFirst();
+            occ.push_back(std::make_pair(0, prev));
+            for(size_t i=1;i<this->tot_strings();i++){
+                prev = this->locateNext(prev);
+                occ.push_back(std::make_pair(i, prev));
+            }
+            return occ;
+
+        }
+
+
+
 
 
         // first is the symbol and the second is the next position index (backtrack)
         std::pair<size_t, size_t> psi(size_t idx);
 
         size_type total_runs();
+
+        size_t get_sequence_size() const { return this->sequence_size; }
+
+        size_t bwt_size() const { return this->sequence_size; }
+
+        size_t text_size() const { return this->sequence_size - this->tot_strings(); }
+
+
+        size_t F_at(size_t idx) const {
+
+            for(size_t i=0; i<C.size(); i++){
+                if(C[i]>idx){
+                    // finding the symbol correspond to index i in the C array
+                    for (size_t j = 0; j < 256; j++) {
+                        if (sym_map[j] == i) {
+                            return j;
+                        }
+                    }
+                }
+            }
+            return -1;
+
+
+        };
 //
 ////------------------------------------------------------------------------------
 //
@@ -302,7 +450,7 @@ namespace panindexer {
         }
 
 
-        size_t get_sequence_size() const { return this->sequence_size; }
+
 //    }; // class FastLocate
 //
 ////------------------------------------------------------------------------------

@@ -38,72 +38,20 @@ int main(int argc, char **argv) {
     std::string rlbwt_file = std::string(argv[3]);
 
     int threads = 8;
-    size_t k = 31;
+    size_t k = 10;
 
 
-    cerr << "Reading the rindex file" << endl;
-    std::ifstream in(index_file);
-    bool fast;
-    //fast or small index?
-    in.read((char *) &fast, sizeof(fast));
-    r_index<> idx;
-    idx.load(in);
+//    cerr << "Reading the rindex file" << endl;
+//    std::ifstream in(index_file);
+//    bool fast;
+//    //fast or small index?
+//    in.read((char *) &fast, sizeof(fast));
+//    r_index<> idx;
+//    idx.load(in);
 
 
-//    std::cerr<<"Computing the FM-index from the input BCR BWT"<<std::endl;
-//    fm_index fmi(rlbwt_file);
-
-    bwt_buff_reader bwt_buff(rlbwt_file);
-    cerr << "Runs " << bwt_buff.size() << endl;
-
-    fm_index fmi(rlbwt_file);
-
-
-    cerr << fmi.lf(0).first << " " << fmi.lf(0).second << endl;
-    cerr << fmi.lf(1).first << " " << fmi.lf(1).second << endl;
-    cerr << fmi.lf(2).first << " " << fmi.lf(2).second << endl;
-    cerr << fmi.lf(3).first << " " << fmi.lf(3).second << endl;
-
-    cerr << fmi.C[0] << " " << fmi.C[1] << " " << fmi.C[2] << " " << fmi.C[3] << endl;
-//    cerr << fmi.sym_map['A'] << " " << fmi.sym_map['C'] << " " << fmi.sym_map['G'] << " " << fmi.sym_map['T'] << endl;
-    cerr << fmi.bwt[0] << " " << fmi.bwt[1] << " " << fmi.bwt[2] << " " << fmi.bwt[3] << endl;
-
-    // print stuff in fmi.sym_map
-    for (size_t i = 0; i < 256; i++){
-        if (fmi.sym_map[i] != 0){
-            cerr << i << " " << fmi.sym_map[i] << endl;
-        }
-    }
-
-
-    size_t symb = 'A';
-    cerr << fmi.bwt << endl;
-
-
-    FastLocate r_index(rlbwt_file);
-
-
-
-    // checking the backward navigation psi
-    cerr << "PSI " << r_index.psi(0) << endl;
-    cerr << "PSI " << r_index.psi(1) << endl;
-    cerr << "PSI " << r_index.psi(2) << endl;
-    cerr << "PSI " << r_index.psi(3) << endl;
-    cerr << "PSI " << r_index.psi(4) << endl;
-
-
-
-    cerr << " 5 " << r_index.locateNext(5) << endl;
-    cerr << " 6 " << r_index.locateNext(6) << endl;
-    cerr << " 7 " << r_index.locateNext(7) << endl;
-    cerr << " 8 " << r_index.locateNext(8) << endl;
-    cerr << " 9 " << r_index.locateNext(9) << endl;
-    cerr << " 10 " << r_index.locateNext(10) << endl;
-    cerr << " 11 " << r_index.locateNext(11) << endl;
-    cerr << " 12 " << r_index.locateNext(12) << endl;
-    cerr << " 13 " << r_index.locateNext(13) << endl;
-    cerr << " 14 " << r_index.locateNext(14) << endl;
-
+    FastLocate idx(rlbwt_file);
+//    exit(0);
 
 
 
@@ -112,30 +60,6 @@ int main(int argc, char **argv) {
     bool starts_with_to = false;
     size_t first_run = 0;
 //    size_t symb = 'G';
-
-
-
-    auto temp = r_index.LF(run, symb, starts_with_to, first_run);
-    cerr << "TEMP " << temp.first << " " << temp.second << endl;
-
-
-    std::vector <size_type> res = r_index.locate(run);
-
-    // print all the res
-    for (size_t i = 0; i < res.size(); i++){
-        cerr << res[i] << " ";
-    }
-
-
-    auto x = r_index.decompressDA();
-    cerr << "DA " << x.size() << endl;
-    for (size_t i = 0; i < x.size(); i++){
-        cerr << x[i] << " ";
-    }
-
-    cerr << r_index.tot_strings() << endl;
-
-    exit(0);
 
 
     GBZ gbz;
@@ -174,7 +98,6 @@ int main(int argc, char **argv) {
 //
 //
     cerr << "Adding the kmers to the BPlusTree" << endl;
-////    kmers_to_bplustree(idx, bptree, index, k, {0, idx.bwt_size() - 1}, "");
     parallel_kmers_to_bplustree(idx, bptree, index, k, {0, idx.bwt_size() - 1});
 //
 
@@ -258,8 +181,16 @@ int main(int argc, char **argv) {
     string pattern = "$";
 
 
-    // get the ISA values for the end of each sequence by searching for pattern # and locating the results
-    auto OCC = idx.ISA(pattern);
+    // Want to find the end of each sequence in the text
+//    auto OCC = idx.ISA(pattern);
+    auto OCC = idx.OCC();
+
+    //print all elements of the OCC array
+    for (size_t i = 0; i < OCC.size(); i++){
+        cerr << "OCC[" << i << "] = " << OCC[i] << endl;
+    }
+    exit(0);
+
 
     // using the sort_end_of_seq function
     // the first item in the nth element of this is the end of the nth sequence in the bwt

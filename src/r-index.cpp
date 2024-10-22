@@ -213,22 +213,29 @@ namespace panindexer {
     }
 
     size_t FastLocate::bwt_char_at(size_t idx) {
-        size_t sym, freq;
-        size_t offset = 0;
-        for (size_t i = 0; i < this->buff_reader->size(); i++) {
-            this->buff_reader->read_run(i, sym, freq);
-            offset += freq;
-            if (offset > idx) {
-                return sym;
-            }
-        }
-        return 0;
+        auto iter = this->blocks_start_pos.predecessor(idx);
+        auto res = this->blocks[iter->first].bwt_char_at(idx - iter->second);
+        return res;
+//        size_t sym, freq;
+//        size_t offset = 0;
+//        for (size_t i = 0; i < this->buff_reader->size(); i++) {
+//            this->buff_reader->read_run(i, sym, freq);
+//            offset += freq;
+//            if (offset > idx) {
+//                std::cerr << idx << " " << res << " " << sym << std::endl;
+//                assert(res == sym);
+//
+//                return sym;
+//            }
+//        }
+//        std::cerr << "return 0" << std::endl;
+//        return 0;
     }
 
     // This function provide backward navigation in the BWT
     std::pair <size_t, size_t> FastLocate::psi(size_t idx) {
         size_t symbol = this->bwt_char_at(idx);
-        auto rank_at = this->rankAt(idx, symbol);
+//        auto rank_at = this->rankAt(idx, symbol);
 
 
         return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol) - 1};
@@ -238,38 +245,58 @@ namespace panindexer {
     // current_position Tracks how far we've gone through the BWT
     // The number includes the index symbol too
     size_t FastLocate::rankAt(size_t pos, size_t symbol, size_t &run_id, size_t &current_position) const {
-        size_t cumulative_rank = 0; // This will hold the rank of the target symbol
 
-        size_t run_symbol, run_freq;
+        auto iter = this->blocks_start_pos.predecessor(pos);
+        size_t run_num = 0;
+        size_t cur_pos = 0;
+        auto cum_rank = this->blocks[iter->first].rankAt(pos - iter->second, symbol, run_num, cur_pos);
+        run_id = iter->first * this->block_size + run_num;
+        current_position = iter->second + cur_pos;
+        auto cumulative_rank = cum_rank + this->blocks[iter->first].get_cum_ranks()[this->sym_map[symbol]];
 
-        // Iterate through the runs until we surpass the target position
-        while (run_id < this->buff_reader->size()) {
-            // Read the current run's symbol and frequency
-            this->buff_reader->read_run(run_id, run_symbol, run_freq);
+//        auto run_id1 = run_id;
+//        auto current_position1 = current_position;
 
-            // If the current run contains the symbol we're interested in
-            if (run_symbol == symbol) {
-                // If the run goes beyond the target position, we only count part of it
-                if (current_position + run_freq > pos) {
-                    // Add the partial frequency (only up to the target position)
-                    cumulative_rank += (pos - current_position + 1);
-                    break;
-                } else {
-                    // Otherwise, add the whole run's frequency
-                    cumulative_rank += run_freq;
-                }
-            }
 
-            // Move to the next position in the BWT
-            current_position += run_freq;
-            run_id++; // Move to the next run
 
-            // If we've passed the position, stop
-            if (current_position > pos) {
-                break;
-            }
-        }
-
+//        run_id = 0;
+//        current_position = 0;
+//        size_t cumulative_rank = 0; // This will hold the rank of the target symbol
+//
+//        size_t run_symbol, run_freq;
+//
+//
+//        // Iterate through the runs until we surpass the target position
+//        while (run_id < this->buff_reader->size()) {
+//            // Read the current run's symbol and frequency
+//            this->buff_reader->read_run(run_id, run_symbol, run_freq);
+//
+//            // If the current run contains the symbol we're interested in
+//            if (run_symbol == symbol) {
+//                // If the run goes beyond the target position, we only count part of it
+//                if (current_position + run_freq > pos) {
+//                    // Add the partial frequency (only up to the target position)
+//                    cumulative_rank += (pos - current_position + 1);
+//                    break;
+//                } else {
+//                    // Otherwise, add the whole run's frequency
+//                    cumulative_rank += run_freq;
+//                }
+//            }
+//
+//            // Move to the next position in the BWT
+//            current_position += run_freq;
+//            run_id++; // Move to the next run
+//
+//            // If we've passed the position, stop
+//            if (current_position > pos) {
+//                break;
+//            }
+//        }
+//
+//        assert (cumulative_rank == res);
+//        assert(run_id == run_id1);
+//        assert(current_position == current_position1);
         return cumulative_rank;
     }
 
@@ -286,34 +313,34 @@ namespace panindexer {
         size_t start_offset = range.first;
         bool first_run_found = false;      // Track whether we've found the first run
 
-        range.first = this->rankAt(range.first, sym, run_id, current_position) - 1;  // Use rankAt to update range.first
+        range.first = this->rankAt(range.first, sym, run_id, current_position) - 1;
 
         // Check if the first run contains the symbol and overlaps with range.first
-        if (current_position > start_offset) {
-            first_run_found = true;
-            if (sym == this->buff_reader->read_sym(run_id)) {  // Compare the symbol of the current run
-                starts_with_to = true;  // The range starts with the symbol
-                first_run = run_id; // Set the first run id
-            }
-        }
+//        if (current_position > start_offset) {
+//            first_run_found = true;
+//            if (sym == this->buff_reader->read_sym(run_id)) {  // Compare the symbol of the current run
+//                starts_with_to = true;  // The range starts with the symbol
+//                first_run = run_id; // Set the first run id
+//            }
+//        }
 
         // Rank for the end of the range
-        while (run_id < this->buff_reader->size() && current_position <= range.second) {
-            size_t symbol_in_run = 0;
-            size_t freq_in_run = 0;
-            this->buff_reader->read_run(run_id, symbol_in_run, freq_in_run);  // Read the run symbol and its frequency
-
-            ++run_id;  // Move to the next run
-            current_position += freq_in_run;  // Increment the BWT position
-
-            if (symbol_in_run == sym && first_run == std::numeric_limits<size_type>::max()) {
-                if (!first_run_found) {
-                    starts_with_to = true;
-                }
-                first_run = run_id - 1;  // Set the first run if not found
-            }
-            first_run_found = true;
-        }
+//        while (run_id < this->buff_reader->size() && current_position <= range.second) {
+//            size_t symbol_in_run = 0;
+//            size_t freq_in_run = 0;
+//            this->buff_reader->read_run(run_id, symbol_in_run, freq_in_run);  // Read the run symbol and its frequency
+//
+//            ++run_id;  // Move to the next run
+//            current_position += freq_in_run;  // Increment the BWT position
+//
+//            if (symbol_in_run == sym && first_run == std::numeric_limits<size_type>::max()) {
+//                if (!first_run_found) {
+//                    starts_with_to = true;
+//                }
+//                first_run = run_id - 1;  // Set the first run if not found
+//            }
+//            first_run_found = true;
+//        }
 
         // Rank the second part of the range
         run_id = 0;
@@ -378,6 +405,13 @@ namespace panindexer {
         this->buff_reader = new bwt_buff_reader(source);
         this->calculate_C();
 
+        // creating the blocks and the sd_vector storing the start positions of the blocks
+//        size_t run_id = 0;
+
+
+
+
+
 
         if (this->buff_reader->size() == 0) {
             if (Verbosity::level >= Verbosity::FULL) {
@@ -385,6 +419,119 @@ namespace panindexer {
             }
             return;
         }
+
+        std::cerr << this->total_runs() / this->block_size << std::endl;
+        this->blocks.resize((this->total_runs() / this->block_size) + 1);
+
+
+        size_t run_iterator = 0;
+
+        size_t run_nums = 0;
+        size_t current_block_id = 0;
+//        size_t start_buff = 0;
+        std::vector<size_t> cumulative_freq;
+        cumulative_freq.resize(this->C.size(), 0);
+        std::cerr << cumulative_freq.size() << std::endl;
+
+        size_t start_offset = 0;
+
+        std::vector<std::pair<size_t, size_t>> run_buff;
+
+        sdsl::sd_vector_builder block_sd_builder(this->bwt_size(), (this->buff_reader->size() / this->block_size) + 1);
+
+        while (run_iterator < this->buff_reader->size()) {
+
+            if (run_nums == 0){
+                // adding the cumulative freq of the previous runs to the current block
+
+                this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
+                block_sd_builder.set_unsafe(start_offset);
+            }
+
+            size_t sym, freq;
+            this->buff_reader->read_run(run_iterator, sym, freq);
+
+//            std::cerr << "The run is: " << sym << " " << freq << std::endl;
+
+
+            // handling each endmarker as a separate run
+            if (sym == ENDMARKER){
+                // in this case we just add the endmarker run to the block
+                if (run_nums + freq < this->block_size){
+                    run_nums += freq;
+                    cumulative_freq[this->sym_map[sym]] += freq;
+                    start_offset += freq;
+                    for (size_t i = 0; i < freq; i++){
+                        run_buff.push_back({sym, 1});
+                    }
+                } else {
+                    // in this case we got to add the endmarkers to the next block too
+                    // adding the endmarkers to the current block
+                    std::cerr << this->block_size - run_nums << std::endl;
+                    for (size_t i = 0; i < (this->block_size - run_nums); i++){
+//                        std::cerr << "adding the endmarker to the current block" << std::endl;
+                        cumulative_freq[this->sym_map[sym]] += 1;
+                        start_offset += 1;
+                        run_buff.push_back({sym, 1});
+                    }
+
+                    auto remaining_freq = freq - (this->block_size - run_nums);
+                    run_nums += this->block_size - run_nums;
+                    assert(run_nums == this->block_size);
+                    // now the current block is full
+                    this->blocks[current_block_id].set_runs(run_buff);
+                    current_block_id++; // moving to the next block
+                    run_buff.clear();
+
+
+                    run_nums = 0;
+
+                    block_sd_builder.set_unsafe(start_offset);
+                    this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
+
+                    // now have to handle the remaining runs of the endmarker
+
+                    for (size_t i = 0; i < remaining_freq; i++){
+                        cumulative_freq[this->sym_map[sym]] += 1;
+                        start_offset++;
+                        run_buff.push_back({sym, 1});
+                        run_nums += 1;
+                    }
+
+                }
+
+            } else { // when the run is not and endmarker
+                cumulative_freq[this->sym_map[sym]] += freq;
+                run_buff.push_back({sym, freq});
+                run_nums++;
+                start_offset += freq;
+
+
+
+            }
+
+
+
+
+            // the block is full
+            if (run_nums == this->block_size){
+                this->blocks[current_block_id].set_runs(run_buff);
+
+                run_buff.clear();
+                current_block_id++;
+                run_nums = 0;
+            }
+
+            run_iterator++;
+
+        }
+
+        // have to check if the last block is added
+        if (run_nums != 0){
+            this->blocks[current_block_id].set_runs(run_buff);
+        }
+
+        this->blocks_start_pos = sdsl::sd_vector<>(block_sd_builder);
 
         // Determine the number of logical runs before each record.
         size_type total_runs = this->total_runs();
@@ -419,7 +566,6 @@ namespace panindexer {
 
 
 
-        // TODO: I think this should be the run-ids in the BWT that the F is an Endmarker ($, 00, ...)
         std::vector <size_type> endmarker_runs(n_seq, 0);
         {
             size_type run_id = 0;
@@ -445,7 +591,7 @@ namespace panindexer {
         if (Verbosity::level >= Verbosity::FULL) {
             std::cerr << "FastLocate::FastLocate(): Extracting head/tail samples" << std::endl;
         }
-#pragma omp parallel for schedule(dynamic, 1)
+//#pragma omp parallel for schedule(dynamic, 1)
         for (size_type i = 0; i < n_seq; i++) {
 
             std::vector <sample_record> head_buffer, tail_buffer;
