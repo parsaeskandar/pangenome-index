@@ -376,6 +376,10 @@ namespace panindexer {
             return;
         }
 
+        // Determine the number of logical runs before each record.
+        size_type total_runs = this->total_runs();
+        auto n_seq = this->tot_strings();
+
         std::cerr << this->total_runs() / this->block_size << std::endl;
         this->blocks.resize((this->total_runs() / this->block_size) + 1);
 
@@ -385,19 +389,24 @@ namespace panindexer {
         size_t run_nums = 0;
         size_t current_block_id = 0;
 //        size_t start_buff = 0;
-        std::vector<size_t> cumulative_freq;
+        std::vector <size_t> cumulative_freq;
         cumulative_freq.resize(this->C.size(), 0);
         std::cerr << cumulative_freq.size() << std::endl;
 
         size_t start_offset = 0;
 
-        std::vector<std::pair<size_t, size_t>> run_buff;
+        std::vector <std::pair<size_t, size_t>> run_buff;
 
-        sdsl::sd_vector_builder block_sd_builder(this->bwt_size(), (this->buff_reader->size() / this->block_size) + 1);
+        sdsl::sd_vector_builder block_sd_builder(this->bwt_size(), (total_runs / this->block_size) +
+                                                                   (total_runs % this->block_size != 0));
+        std::cerr << (total_runs / this->block_size) + (total_runs % this->block_size != 0) << std::endl;
 
+        if (Verbosity::level >= Verbosity::FULL) {
+            std::cerr << "FastLocate::FastLocate(): calculating the BWT information" << std::endl;
+        }
         while (run_iterator < this->buff_reader->size()) {
 
-            if (run_nums == 0){
+            if (run_nums == 0) {
                 // adding the cumulative freq of the previous runs to the current block
 
                 this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
@@ -411,20 +420,20 @@ namespace panindexer {
 
 
             // handling each endmarker as a separate run
-            if (sym == ENDMARKER){
+            if (sym == ENDMARKER) {
                 // in this case we just add the endmarker run to the block
-                if (run_nums + freq < this->block_size){
+                if (run_nums + freq < this->block_size) {
                     run_nums += freq;
                     cumulative_freq[this->sym_map[sym]] += freq;
                     start_offset += freq;
-                    for (size_t i = 0; i < freq; i++){
+                    for (size_t i = 0; i < freq; i++) {
                         run_buff.push_back({sym, 1});
                     }
                 } else {
                     // in this case we got to add the endmarkers to the next block too
                     // adding the endmarkers to the current block
                     std::cerr << this->block_size - run_nums << std::endl;
-                    for (size_t i = 0; i < (this->block_size - run_nums); i++){
+                    for (size_t i = 0; i < (this->block_size - run_nums); i++) {
 //                        std::cerr << "adding the endmarker to the current block" << std::endl;
                         cumulative_freq[this->sym_map[sym]] += 1;
                         start_offset += 1;
@@ -432,27 +441,68 @@ namespace panindexer {
                     }
 
                     auto remaining_freq = freq - (this->block_size - run_nums);
+
                     run_nums += this->block_size - run_nums;
                     assert(run_nums == this->block_size);
                     // now the current block is full
                     this->blocks[current_block_id].set_runs(run_buff);
-                    current_block_id++; // moving to the next block
-                    run_buff.clear();
 
 
-                    run_nums = 0;
+                    auto block_fill = remaining_freq / this->block_size;
 
-                    block_sd_builder.set_unsafe(start_offset);
-                    this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
+                    std::cerr << "block fill " << block_fill << std::endl;
+                    for (size_t i = 0; i < block_fill + 1; i++) {
+                        run_buff.clear();
+                        current_block_id++;
+                        run_nums = 0;
+                        if (i == block_fill && remaining_freq % this->block_size == 0) {
+                            break;
+                        }
+                        block_sd_builder.set_unsafe(start_offset);
+                        this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
 
-                    // now have to handle the remaining runs of the endmarker
+                        if (i == block_fill) {
+                            for (size_t j = 0; j < remaining_freq % this->block_size; j++) {
+                                cumulative_freq[this->sym_map[sym]] += 1;
+                                start_offset++;
+                                run_buff.push_back({sym, 1});
+                                run_nums += 1;
+                            }
+                            assert(run_nums == remaining_freq % this->block_size);
+                            assert(run_nums < this->block_size);
 
-                    for (size_t i = 0; i < remaining_freq; i++){
-                        cumulative_freq[this->sym_map[sym]] += 1;
-                        start_offset++;
-                        run_buff.push_back({sym, 1});
-                        run_nums += 1;
+
+                        } else {
+
+                            for (size_t j = 0; j < this->block_size; j++) {
+                                cumulative_freq[this->sym_map[sym]] += 1;
+                                start_offset++;
+                                run_buff.push_back({sym, 1});
+                                run_nums += 1;
+                            }
+                        }
+
                     }
+
+
+
+//                    current_block_id++; // moving to the next block
+//                    run_buff.clear();
+//
+//
+//                    run_nums = 0;
+//
+//                    block_sd_builder.set_unsafe(start_offset);
+//                    this->blocks[current_block_id].set_character_cum_ranks(cumulative_freq);
+//
+//                    // now have to handle the remaining runs of the endmarker
+//
+//                    for (size_t i = 0; i < remaining_freq; i++){
+//                        cumulative_freq[this->sym_map[sym]] += 1;
+//                        start_offset++;
+//                        run_buff.push_back({sym, 1});
+//                        run_nums += 1;
+//                    }
 
                 }
 
@@ -463,14 +513,13 @@ namespace panindexer {
                 start_offset += freq;
 
 
-
             }
 
 
 
 
             // the block is full
-            if (run_nums == this->block_size){
+            if (run_nums == this->block_size) {
                 this->blocks[current_block_id].set_runs(run_buff);
 
                 run_buff.clear();
@@ -483,15 +532,16 @@ namespace panindexer {
         }
 
         // have to check if the last block is added
-        if (run_nums != 0){
+        if (run_nums != 0) {
             this->blocks[current_block_id].set_runs(run_buff);
         }
 
-        this->blocks_start_pos = sdsl::sd_vector<>(block_sd_builder);
+        if (Verbosity::level >= Verbosity::FULL) {
+            std::cerr << "FastLocate::FastLocate(): " << this->blocks.size() << " blocks of size " << this->block_size
+                      << " calculated" << std::endl;
+        }
 
-        // Determine the number of logical runs before each record.
-        size_type total_runs = this->total_runs();
-        auto n_seq = this->tot_strings();
+        this->blocks_start_pos = sdsl::sd_vector<>(block_sd_builder);
 
 
         if (Verbosity::level >= Verbosity::FULL) {
@@ -517,9 +567,6 @@ namespace panindexer {
         if (Verbosity::level >= Verbosity::FULL) {
             std::cerr << "FastLocate::FastLocate(): Processing the endmarker record" << std::endl;
         }
-
-
-
 
 
         std::vector <size_type> endmarker_runs(n_seq, 0);
@@ -583,8 +630,8 @@ namespace panindexer {
             // GBWT is an FM-index of the reverse paths. The sequence offset r-index needs
             // is the distance to the BWT position with the endmarker (to the end of the
             // path, to the start of the string).
-                for(sample_record& record : head_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
-                for(sample_record& record : tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
+            for (sample_record &record: head_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
+            for (sample_record &record: tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
 
 #pragma omp critical
             {
@@ -755,54 +802,52 @@ namespace panindexer {
         return result;
     }
 
-        std::vector<size_type>
-        FastLocate::decompressSA() const
-        {
-            std::vector<size_type> result;
+    std::vector <size_type>
+    FastLocate::decompressSA() const {
+        std::vector <size_type> result;
 
-            result.reserve(this->get_sequence_size());
-            result.push_back(this->locateFirst());
-            for(size_type i = 1 ; i < this->get_sequence_size(); i++)
-            {
-                result.push_back(this->locateNext(result.back()));
-            }
-
-            return result;
+        result.reserve(this->get_sequence_size());
+        result.push_back(this->locateFirst());
+        for (size_type i = 1; i < this->get_sequence_size(); i++) {
+            result.push_back(this->locateNext(result.back()));
         }
 
-        std::vector<size_type>
-        FastLocate::decompressDA() const
-        {
-            std::vector<size_type> result = this->decompressSA();
-            for(size_type i = 0; i < result.size(); i++)
-            {
-                result[i] = this->seqId(result[i]);
-            }
-            return result;
+        return result;
+    }
+
+    std::vector <size_type>
+    FastLocate::decompressDA() const {
+        std::vector <size_type> result = this->decompressSA();
+        for (size_type i = 0; i < result.size(); i++) {
+            result[i] = this->seqId(result[i]);
         }
+        return result;
+    }
 
 ////------------------------------------------------------------------------------
 //
-    size_type FastLocate::locateNext(size_type prev) const {
+    size_type FastLocate::locateNext(size_type
+    prev) const {
     auto iter = this->last.predecessor(prev);
     return this->samples[this->last_to_run[iter->first] + 1] + (prev - iter->second);
 }
+
 //
 ////------------------------------------------------------------------------------
 //
-    void
-    printStatistics(const FastLocate& index, const std::string& name)
-    {
-        printHeader("Runs"); std::cout << index.size() << std::endl;
-        printHeader("Size"); std::cout << inMegabytes(sdsl::size_in_bytes(index)) << " MB" << std::endl;
-        std::cout << std::endl;
-    }
+void
+printStatistics(const FastLocate &index, const std::string &name) {
+    printHeader("Runs");
+    std::cout << index.size() << std::endl;
+    printHeader("Size");
+    std::cout << inMegabytes(sdsl::size_in_bytes(index)) << " MB" << std::endl;
+    std::cout << std::endl;
+}
 
-    std::string
-    indexType(const FastLocate&)
-    {
-        return "R-index";
-    }
+std::string
+indexType(const FastLocate &) {
+    return "R-index";
+}
 
 //------------------------------------------------------------------------------
 

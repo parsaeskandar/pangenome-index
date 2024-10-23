@@ -186,7 +186,7 @@ namespace panindexer {
                 }
             }
 
-            sdsl::int_vector<64> get_cum_ranks() const { return this->character_cum_ranks;}
+            const sdsl::int_vector<64>& get_cum_ranks() const { return this->character_cum_ranks; }
 
         };
 
