@@ -203,7 +203,7 @@ namespace panindexer {
         // store the number of each character in the whole BWT. For example the C[sym_map['A']] gives the total number of As in the whole text
         sdsl::int_vector<64> C;
 
-        size_t block_size = 3;
+        size_t block_size = 10;
 
         // store the run blocks, each containing block_size runs
         std::vector<Run_blocks> blocks;

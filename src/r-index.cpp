@@ -253,50 +253,6 @@ namespace panindexer {
         run_id = iter->first * this->block_size + run_num;
         current_position = iter->second + cur_pos;
         auto cumulative_rank = cum_rank + this->blocks[iter->first].get_cum_ranks()[this->sym_map[symbol]];
-
-//        auto run_id1 = run_id;
-//        auto current_position1 = current_position;
-
-
-
-//        run_id = 0;
-//        current_position = 0;
-//        size_t cumulative_rank = 0; // This will hold the rank of the target symbol
-//
-//        size_t run_symbol, run_freq;
-//
-//
-//        // Iterate through the runs until we surpass the target position
-//        while (run_id < this->buff_reader->size()) {
-//            // Read the current run's symbol and frequency
-//            this->buff_reader->read_run(run_id, run_symbol, run_freq);
-//
-//            // If the current run contains the symbol we're interested in
-//            if (run_symbol == symbol) {
-//                // If the run goes beyond the target position, we only count part of it
-//                if (current_position + run_freq > pos) {
-//                    // Add the partial frequency (only up to the target position)
-//                    cumulative_rank += (pos - current_position + 1);
-//                    break;
-//                } else {
-//                    // Otherwise, add the whole run's frequency
-//                    cumulative_rank += run_freq;
-//                }
-//            }
-//
-//            // Move to the next position in the BWT
-//            current_position += run_freq;
-//            run_id++; // Move to the next run
-//
-//            // If we've passed the position, stop
-//            if (current_position > pos) {
-//                break;
-//            }
-//        }
-//
-//        assert (cumulative_rank == res);
-//        assert(run_id == run_id1);
-//        assert(current_position == current_position1);
         return cumulative_rank;
     }
 
