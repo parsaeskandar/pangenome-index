@@ -216,30 +216,12 @@ namespace panindexer {
         auto iter = this->blocks_start_pos.predecessor(idx);
         auto res = this->blocks[iter->first].bwt_char_at(idx - iter->second);
         return res;
-//        size_t sym, freq;
-//        size_t offset = 0;
-//        for (size_t i = 0; i < this->buff_reader->size(); i++) {
-//            this->buff_reader->read_run(i, sym, freq);
-//            offset += freq;
-//            if (offset > idx) {
-//                std::cerr << idx << " " << res << " " << sym << std::endl;
-//                assert(res == sym);
-//
-//                return sym;
-//            }
-//        }
-//        std::cerr << "return 0" << std::endl;
-//        return 0;
     }
 
     // This function provide backward navigation in the BWT
     std::pair <size_t, size_t> FastLocate::psi(size_t idx) {
         size_t symbol = this->bwt_char_at(idx);
-//        auto rank_at = this->rankAt(idx, symbol);
-
-
-        return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol) - 1};
-
+        return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol)};
     }
 
     // current_position Tracks how far we've gone through the BWT
@@ -257,7 +239,16 @@ namespace panindexer {
     }
 
 
+
+    // TODO: optimize for the ranges that are in the same or adjacent blocks
     range_type FastLocate::LF(range_type range, size_t sym, bool &starts_with_to, size_t &first_run) const {
+
+
+        if(!this->sym_map[sym]) return {1,0};
+
+        if (range.first > range.second) {
+            return {1, 0};
+        }
         starts_with_to = false;
         first_run = std::numeric_limits<size_type>::max();
 
@@ -269,7 +260,8 @@ namespace panindexer {
         size_t start_offset = range.first;
         bool first_run_found = false;      // Track whether we've found the first run
 
-        range.first = this->rankAt(range.first, sym, run_id, current_position) - 1;
+        range.first = this->rankAt(range.first, sym, run_id, current_position);
+//        std::cerr << "LF function range first " << range.first << std::endl;
 
         // Check if the first run contains the symbol and overlaps with range.first
 //        if (current_position > start_offset) {
@@ -306,10 +298,8 @@ namespace panindexer {
         size_t sym_inside = this->rankAt(range.second + 1, sym, run_id, current_position) - range.first;
 
         if (sym_inside == 0) {
-            range.second = range.first - 1;
-            return range;
+            return {1, 0};
         }
-//        range.second = this->rankAt(range.second + 1, sym, run_id, current_position);
         range.first += this->C[this->sym_map[sym]];
         range.second = range.first + sym_inside - 1;
 
@@ -317,28 +307,6 @@ namespace panindexer {
         return range;  // Return the updated range
     }
 
-
-
-
-
-
-//    // Read while offset <= i.
-//    // if offset and run_num are equal to zero at first, after calling the function the offset will be the first offset
-//    // that is greater than i from cumulative frequency of the runs until run_num (this is the start of the next run and the run_num is the rank_id of the next run too)
-//    void FastLocate::readPast(size_t i, size_t &offset, size_t &run_num) {
-//        size_t sym, freq;
-//        while (offset <= i) {
-//            this->buff_reader.read_run(run_num, sym, freq)
-//            offset += freq;
-//            run_num += 1;
-//        }
-//    }
-//
-//    // This function find the rank of the symbol at the i index position
-//    FastLocate::rankAt(size_t sym, size_t i ) {
-//
-//
-//    }
 
     // This function returns the exact number of runs, considering that each ENDMARKER is a separate run
     size_type FastLocate::total_runs() {
@@ -360,14 +328,6 @@ namespace panindexer {
 
         this->buff_reader = new bwt_buff_reader(source);
         this->calculate_C();
-
-        // creating the blocks and the sd_vector storing the start positions of the blocks
-//        size_t run_id = 0;
-
-
-
-
-
 
         if (this->buff_reader->size() == 0) {
             if (Verbosity::level >= Verbosity::FULL) {
@@ -572,11 +532,9 @@ namespace panindexer {
         std::vector <size_type> endmarker_runs(n_seq, 0);
         {
             size_type run_id = 0;
-//                edge_type prev = this->index->start(0);
             auto prev = this->psi(0);
 
             for (size_type i = 1; i < n_seq; i++) {
-//                    edge_type curr = this->index->start(i);
                 auto curr = this->psi(i);
 
                 if (curr.first == ENDMARKER || curr.first != prev.first) {
@@ -594,7 +552,7 @@ namespace panindexer {
         if (Verbosity::level >= Verbosity::FULL) {
             std::cerr << "FastLocate::FastLocate(): Extracting head/tail samples" << std::endl;
         }
-//#pragma omp parallel for schedule(dynamic, 1)
+#pragma omp parallel for schedule(dynamic, 1)
         for (size_type i = 0; i < n_seq; i++) {
 
             std::vector <sample_record> head_buffer, tail_buffer;
@@ -613,8 +571,6 @@ namespace panindexer {
                 this->bwt_index_run_id(curr.second, run, run_id);
 
                 // have to find which run the next.first belongs to
-
-
                 if (curr.second == run.first) {
                     head_buffer.push_back({i, seq_offset, run_id});
                 }
@@ -625,11 +581,7 @@ namespace panindexer {
                 seq_offset++;
             }
 
-            // print the head and tail buffer
 
-            // GBWT is an FM-index of the reverse paths. The sequence offset r-index needs
-            // is the distance to the BWT position with the endmarker (to the end of the
-            // path, to the start of the string).
             for (sample_record &record: head_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
             for (sample_record &record: tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
 
@@ -683,21 +635,6 @@ namespace panindexer {
                       << this->get_sequence_size()
                       << " in " << seconds << " seconds" << std::endl;
         }
-
-        // print all the samples, last, last_to_tun
-//        std::cerr << "Samples: " << std::endl;
-//        for (size_t i = 0; i < this->samples.size(); i++){
-//            std::cerr << "samples " << i << " " << this->samples[i] << std::endl;
-//        }
-//        std::cerr << "Last: " << std::endl;
-//        for (size_t i = 0; i < this->last.size(); i++){
-//            std::cerr << "last " << i << " " << this->last[i] << std::endl;
-//        }
-//        std::cerr << "Last to run: " << std::endl;
-//        for (size_t i = 0; i < this->last_to_run.size(); i++){
-//            std::cerr << "last to run " << i << " " << this->last_to_run[i] << std::endl;
-//        }
-
 
     }
 
@@ -753,8 +690,6 @@ namespace panindexer {
         if (first == NO_POSITION) // TODO: check this
         {
 
-//                CompressedRecord record = this->index->record(state.node);
-//                CompressedRecordIterator iter(record);
             size_type run_id = 0;
             size_t offset = 0;
 
@@ -771,13 +706,6 @@ namespace panindexer {
             }
 
             first = this->getSample(run_id);
-
-//                while(!(iter.end()) && iter.offset() <= state.range.first)
-//                {
-//                    ++iter; run_id++;
-//                }
-//                first = this->getSample(state.node, run_id);
-//                offset_of_first = iter.offset() - iter->second;
         }
 
         // Iterate until the start of the range and locate the first occurrence.
@@ -797,7 +725,6 @@ namespace panindexer {
         // TODO: change this sort to parallel ones like in gbwt
         std::sort(result.begin(), result.end());
         result.resize(std::unique(result.begin(), result.end()) - result.begin());
-//        removeDuplicates(result, false);
 
         return result;
     }

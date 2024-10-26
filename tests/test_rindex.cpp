@@ -105,6 +105,7 @@ namespace {
         std::string rlbwt_file = "../test_data/small_test.rl_bwt";
         FastLocate r_index(rlbwt_file);
 
+
         auto x = r_index.decompressDA();
         ASSERT_EQ(x, sequence_indices) << "Invalid Locate results from the r-index";
 

@@ -49,11 +49,11 @@ CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(IN
 
 HEADERS=$(wildcard include/pangenome_index/*.hpp)
 
-LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o)
+LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o)
 LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags)
+PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags)
 
 
 .PHONY: all clean directories test

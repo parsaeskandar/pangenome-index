@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
     std::string rlbwt_file = std::string(argv[3]);
 
     int threads = 8;
-    size_t k = 10;
+    size_t k = 31;
 
 
 //    cerr << "Reading the rindex file" << endl;
@@ -55,13 +55,24 @@ int main(int argc, char **argv) {
 
 
 
-    gbwt::range_type run(5, 10);
+    gbwt::range_type run(0, 13);
     size_t run_id = 0;
     bool starts_with_to = false;
     size_t first_run = 0;
 //    size_t symb = 'G';
 
+//    auto a1 = idx.LF({0, 13}, 'A');
+    gbwt::range_type a = idx.LF({0, 13}, 'A');
+    gbwt::range_type b = idx.LF(a, 'T');
+    std::cerr << "LFFFF" << a << std::endl;
+    std::cerr << "LFFFF" << b << std::endl;
 
+
+    for (size_t i = 0; i < 14; i++) {
+        std::cerr << "rankat " << idx.rankAt(i, 'A') << std::endl;
+    }
+
+//    exit(0);
     GBZ gbz;
     cerr << "Loading the graph file" << endl;
     sdsl::simple_sds::load_from(gbz, graph_file);
@@ -98,7 +109,10 @@ int main(int argc, char **argv) {
 //
 //
     cerr << "Adding the kmers to the BPlusTree" << endl;
-    parallel_kmers_to_bplustree(idx, bptree, index, k, {0, idx.bwt_size() - 1});
+
+    gbwt::range_type whole_bwt(0, idx.bwt_size() - 1);
+    parallel_kmers_to_bplustree(idx, bptree, index, k, whole_bwt);
+
 //
 
 #if TIME
@@ -189,7 +203,6 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < OCC.size(); i++){
         cerr << "OCC[" << i << "] = " << OCC[i] << endl;
     }
-    exit(0);
 
 
     // using the sort_end_of_seq function
@@ -237,7 +250,7 @@ int main(int argc, char **argv) {
          << bwt_size << " = "
          << (double) tag_arrays_covered / bwt_size << endl;
 
-    TagArray tag_array;
+    panindexer::TagArray tag_array;
     tag_array.load_bptree(bptree, idx.bwt_size());
 
     tag_array.serialize(std::cout);

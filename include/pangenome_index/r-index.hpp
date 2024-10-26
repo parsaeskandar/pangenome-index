@@ -136,13 +136,28 @@ namespace panindexer {
             size_t rankAt(size_t pos, size_t symbol, size_t& run_num, size_t& current_position) const {
                 size_t rank = 0;
 
+
+//                if (pos == 0) return 0;
+//                pos -= 1;
+
                 run_num = 0; // starting from the 0th run
 
                 while (run_num < this->runs.size()) {
                     if (this->runs[run_num].first == symbol) {
                         if (current_position + this->runs[run_num].second > pos) {
-                            rank += (pos - current_position + 1);
+//                            if (current_position == pos){
+//                                current_position += this->runs[run_num].second;
+//                                run_num++;
+//                                break;
+//                            } else {
+//                                rank += (pos - current_position + 1);
+//                                break;
+//                            }
+//                            rank += (pos - current_position + 1);
+                            rank += (pos - current_position);
                             break;
+
+
                         } else {
                             rank += this->runs[run_num].second;
                         }
@@ -418,6 +433,13 @@ namespace panindexer {
 //          Internal interface. Do not use.
 //        */
 //
+        size_t rankAt(size_t pos, size_t symbol, size_t& run_id, size_t& current_position) const;
+
+        size_t rankAt(size_t pos, size_t symbol) const {
+            size_t run_id = 0;
+            size_t current_position = 0;
+            return rankAt(pos, symbol, run_id, current_position);
+        };
     private:
         void copy(const FastLocate& source);
 
@@ -426,13 +448,7 @@ namespace panindexer {
 
         void bwt_index_run_id(unsigned long idx, gbwt::range_type& run, size_type& run_id) ;
 
-        size_t rankAt(size_t pos, size_t symbol, size_t& run_id, size_t& current_position) const;
 
-        size_t rankAt(size_t pos, size_t symbol) const {
-            size_t run_id = 0;
-            size_t current_position = 0;
-            return rankAt(pos, symbol, run_id, current_position);
-        };
 
 
         size_t bwt_char_at(size_t idx);

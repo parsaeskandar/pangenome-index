@@ -1,7 +1,7 @@
 //
 // Created by seeskand on 9/16/24.
 //
-
+//
 #ifndef PANGENOME_INDEX_ALGORITHM_HPP
 #define PANGENOME_INDEX_ALGORITHM_HPP
 
@@ -77,129 +77,70 @@ namespace panindexer {
         return OCC;
     }
 
-//void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair < Run, size_t>> &queue,
-//                                   hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
-//                                   size_t k, range_t interval, const string &current_kmer) {
-//
-////    std::cerr << interval.first << " " << interval.second << " " << current_kmer << std::endl;
-//    if (current_kmer.length() == k && interval.first <= interval.second) {
-//
-//        // creating the kmer with the key type
-//        gbwtgraph::Key64 kmer_key = gbwtgraph::Key64::encode(current_kmer);
-//        // check if the kmer_key is in the index and if it is add the run to the queue
-//        auto it = index.find(kmer_key.get_key());
-//        if (it != index.end()) {
-//            Run run = {interval.first, it->second};
-//
-//            queue.push( {run, interval.second - interval.first + 1});
-//        }
-//        return;
-//    }
-//
-//    for ( char base : {'A', 'C', 'G', 'T'}) {
-//        if (interval.first <= interval.second) {
-//            kmers_to_bplustree_worker(idx, queue, index, k, idx.LF(interval, base), base + current_kmer);
-//        }
-//    }
-//}
-//
-//void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
-//                                 hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
-//                                 range_t interval) {
-//    // Thread-safe queue to collect results
-//    ThreadSafeQueue <std::pair<Run, size_t>> queue;
-//
-//    // number of threads
-//    int threads = omp_get_max_threads();
-//    // splitting the starting range (0, idx.bwt_size() - 1) into parts and call the kmers_to_bplustree_worker function
-//    // for each part
-//    size_t part_size = idx.bwt_size();
-//    part_size = (part_size - 1) / threads;
-//
-//    std::cerr << "running each part " << part_size << " using threads " << threads << std::endl;
-//
-//    std::vector<string> starting_kmers = {"A", "C", "G", "T"};
-//#pragma omp parallel for
-//    for (int i = 0; i < threads; i++) {
-////        size_t start = i * part_size;
-////        size_t end = (i + 1) * part_size - 1;
-////        if (i == threads - 1) {
-////            end = idx.bwt_size() - 1;
-////        }
-////        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
-//        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
-//    }
-//
-//    // Single-threaded insertion into BPlusTree
-//    std::pair <Run, size_t> result;
-//    while (queue.try_pop(result)) {
-//        bptree.insert(result.first, result.second);
-//    }
-//}
 
-    void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::tuple<range_t, std::string>> &task_queue,
-    hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
-            ThreadSafeQueue<std::pair<Run, size_t>> &result_queue, size_t k) {
-        std::tuple<range_t, std::string> task;
 
-        // Process tasks from the task queue
-        while (task_queue.try_pop(task)) {
-            range_t interval = std::get<0>(task);
-            std::string current_kmer = std::get<1>(task);
+void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair < Run, size_t>> &queue,
+                                   hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
+                                   size_t k, gbwt::range_type interval, const string &current_kmer) {
 
-            if (current_kmer.length() == k && interval.first <= interval.second) {
-                // k-mer is complete, now handle the result
-                gbwtgraph::Key64 kmer_key = gbwtgraph::Key64::encode(current_kmer);
-                auto it = index.find(kmer_key.get_key());
-                if (it != index.end()) {
-                Run run = {interval.first, it->second};
-                result_queue.push({run, interval.second - interval.first + 1});
-            }
-            continue;
-            }
 
-        // Try to extend the k-mer if the interval is valid
-            for (char base : {'A', 'C', 'G', 'T'}) {
-                if (interval.first <= interval.second) {
-                    range_t new_interval = idx.LF(interval, base);
-                    if (new_interval.first <= new_interval.second) {
-                        // Push the new task to the task queue
-                        task_queue.push(std::make_tuple(new_interval, base + current_kmer));
-                    }
-                }
-            }
+    if (current_kmer.length() == k && interval.first <= interval.second) {
+    if (interval.second < interval.first) std::cerr << interval.first << " " << interval.second << " " << current_kmer << std::endl;
+
+        // creating the kmer with the key type
+        gbwtgraph::Key64 kmer_key = gbwtgraph::Key64::encode(current_kmer);
+        // check if the kmer_key is in the index and if it is add the run to the queue
+        auto it = index.find(kmer_key.get_key());
+        if (it != index.end()) {
+
+            Run run = {interval.first, it->second};
+
+            queue.push( {run, interval.second - interval.first + 1});
+        }
+        return;
+    }
+
+    for ( char base : {'A', 'C', 'G', 'T'}) {
+        if (interval.first <= interval.second) {
+            kmers_to_bplustree_worker(idx, queue, index, k, idx.LF(interval, base), base + current_kmer);
+        }
     }
 }
 
-void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree<Run> &bptree,
-                                 hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
-                                 size_t k, range_t initial_interval) {
-    // Thread-safe queues for tasks and results
-    ThreadSafeQueue<std::tuple<range_t, std::string>> task_queue;
-    ThreadSafeQueue<std::pair<Run, size_t>> result_queue;
+void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
+                                 hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
+                                 gbwt::range_type interval) {
+    // Thread-safe queue to collect results
+    ThreadSafeQueue <std::pair<Run, size_t>> queue;
 
-    // Initial tasks for each base
-    for (char base : {'A', 'C', 'G', 'T'}) {
-        range_t interval = idx.LF(initial_interval, base);
-        if (interval.first <= interval.second) {
-            task_queue.push(std::make_tuple(interval, std::string(1, base)));
-        }
-    }
-
-    // Parallel workers to process tasks
+    // number of threads
     int threads = omp_get_max_threads();
-#pragma omp parallel num_threads(threads)
-    {
-        kmers_to_bplustree_worker(idx, task_queue, index, result_queue, k);
+    // splitting the starting range (0, idx.bwt_size() - 1) into parts and call the kmers_to_bplustree_worker function
+    // for each part
+    size_t part_size = idx.bwt_size();
+    part_size = (part_size - 1) / threads;
+
+    std::cerr << "running each part " << part_size << " using threads " << threads << std::endl;
+
+    std::vector<string> starting_kmers = {"A", "C", "G", "T"};
+#pragma omp parallel for
+    for (int i = 0; i < threads; i++) {
+        size_t start = i * part_size;
+        size_t end = (i + 1) * part_size - 1;
+        if (i == threads - 1) {
+            end = idx.bwt_size() - 1;
+        }
+        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
+//        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
     }
+
 
     // Single-threaded insertion into BPlusTree
-    std::pair<Run, size_t> result;
-    while (result_queue.try_pop(result)) {
+    std::pair <Run, size_t> result;
+    while (queue.try_pop(result)) {
         bptree.insert(result.first, result.second);
     }
 }
-
 
 vector <pair<Run, size_t>>
 extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bptree, int batch_size) {
@@ -363,6 +304,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
         vector <Run> local_tmp1;
 
+
         // traversing the RLBWT of a sequence
         while (true) {
 #pragma omp atomic
@@ -373,7 +315,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
             bwt_index = idx.LF(bwt_index);
             auto first = idx.F_at(bwt_index);
             if (first == ENDMARKER) { // TODO: check this
-//                cerr << "The end of the sequence at bwt index " << bwt_index << endl;
+                cerr << "The end of the sequence at bwt index " << bwt_index << endl;
                 break;
             }
 
@@ -395,7 +337,6 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
             // have to check if the current bwt position is in the bptree or not
             // calling search function if it return a gap run then this position is not currently in the tree and have to add it
             // if it returns a non-gap run then this position is already in the tree and we can continue traversing the bwt
-
             auto bptree_search = bptree.search(bwt_index);
 
             // the current position is not in the tree
@@ -406,6 +347,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
                 Run current_run = {bwt_index, gbwtgraph::Position::encode(current_pos)};
                 local_tmp1.push_back(current_run);
+
 
             } else {
                 // not adding the current position to the tree however checking if the tree position and the current graph
@@ -441,8 +383,8 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 #endif //PANGENOME_INDEX_ALGORITHM_HPP
 
 
-//
-// Created by seeskand on 9/16/24.
+
+//// Created by seeskand on 9/16/24.
 //
 //
 //#ifndef PANGENOME_INDEX_ALGORITHM_HPP
@@ -516,6 +458,9 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 //        return OCC;
 //    }
 //
+//
+//    size_t y = 0;
+//
 //    void kmers_to_bplustree_worker(r_index<> &idx, ThreadSafeQueue<std::pair < Run, size_t>> &queue,
 //    hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
 //            size_t k, range_t interval, const string &current_kmer) {
@@ -534,6 +479,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 //
 //for ( char base : {'A', 'C', 'G', 'T'}) {
 //if (interval.first <= interval.second) {
+//    y++;
 //kmers_to_bplustree_worker(idx, queue, index, k, idx.LF(interval, base), base + current_kmer);
 //}
 //}
@@ -559,6 +505,8 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 //        }
 //        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
 //    }
+//
+//    std::cerr << "y is " << y << std::endl;
 //
 //    // Single-threaded insertion into BPlusTree
 //    std::pair <Run, size_t> result;
