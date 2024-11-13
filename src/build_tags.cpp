@@ -34,8 +34,9 @@ int main(int argc, char **argv) {
 //        exit(0);
 //    }
     std::string graph_file = std::string(argv[1]);
-    std::string index_file = std::string(argv[2]);
-    std::string rlbwt_file = std::string(argv[3]);
+//    std::string index_file = std::string(argv[2]);
+    std::string rlbwt_file = std::string(argv[2]);
+//    std::string temp_file = std::string(argv[3]);
 
     int threads = 8;
     size_t k = 31;
@@ -253,7 +254,16 @@ int main(int argc, char **argv) {
     panindexer::TagArray tag_array;
     tag_array.load_bptree(bptree, idx.bwt_size());
 
-    tag_array.serialize(std::cout);
+
+    auto node_to_comp = node_to_component(gbz);
+
+    
+
+    // query the tag array and print the first 10 runs
+//    tag_array.query(0, 100);
+
+//    tag_array.serialize(std::cout);
+    tag_array.store_blocks(std::cout);
 
 
 

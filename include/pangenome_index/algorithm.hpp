@@ -18,6 +18,7 @@
 #include <hash_map.hpp>
 #include <gbwt/internal.h>
 #include "r-index.hpp"
+#include "gbwtgraph/algorithms.h"
 
 
 
@@ -377,6 +378,23 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
     omp_destroy_lock(&lock);
 }
+
+// This function returns a mapping from each node id to its component id
+std::unordered_map<nid_t, size_t> node_to_component(GBZ &gbz){
+    auto weakly_connected_components = gbwtgraph::weakly_connected_components(gbz.graph);
+    std::unordered_map<nid_t, size_t> node_to_component;
+    size_t node_count = gbz.graph.get_node_count();
+    node_to_component.reserve(node_count);
+
+    for (size_t i = 0; i < weakly_connected_components.size(); i++) {
+        const std::vector<nid_t>& component = weakly_connected_components[i];
+
+        for(nid_t node_id : component) { node_to_component[node_id] = i; }
+    }
+
+    return node_to_component;
+
+    }
 
 }
 

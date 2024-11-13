@@ -90,6 +90,11 @@ namespace panindexer {
     }
 
 
+
+
+
+
+
     void TagArray::load(std::istream &in) {
         try {
             // Deserialize encoded_runs_starts
@@ -156,6 +161,7 @@ namespace panindexer {
 
     void TagArray::query(size_t start, size_t end) {
 
+
         // first have to find ranks of start and end in the bwt_intervals which are number of 1's less than start and end
 
 //        sdsl::sd_vector<>::rank_1_type bwt_intervals_rank(&bwt_intervals);
@@ -165,6 +171,7 @@ namespace panindexer {
             first_bit_index++;
         }
 
+
         size_t end_bit_index = bwt_intervals_rank(end + 1);
 
         size_t number_of_runs = end_bit_index - first_bit_index + 1;
@@ -172,6 +179,7 @@ namespace panindexer {
         // where the first run starts
         std::uint64_t bit_location = encoded_runs_starts_select(first_bit_index);
         std::unordered_set <std::uint64_t> unique_positions;
+
 
         while (number_of_runs > 0) {
             gbwt::size_type decc;
@@ -183,55 +191,79 @@ namespace panindexer {
             uint8_t decoded_length = (decc >> 11) & 0xFF;
             int64_t decoded_node_id = (decc >> 19);
 
+            // print
+            cerr << "Decoded offset: " << decoded_offset << endl;
+            cerr << "Decoded flag: " << decoded_flag << endl;
+            cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
+            cerr << "Decoded node ID: " << decoded_node_id << endl;
+
             number_of_runs--;
             unique_positions.insert(
                     gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
         }
 
-//        std::cout << (end_bit_index - first_bit_index + 1) << '\t' << unique_positions.size() << '\t' << (double)(end_bit_index - first_bit_index + 1)/((double)unique_positions.size()) << std::endl;
-//        std::cerr << "Number of unique positions in the interval: " << unique_positions.size() << std::endl;
+    }
 
-
-        // now have to find the locations of the bits first_bit_index + 1 to end_bit_index in the bwt_intervals
-
-
-//        for(size_t i = first_bit_index; i <= end_bit_index; i++){
-////            cout << "i: " << i << endl;
-//
-//            std::uint64_t bit_location = encoded_runs_starts_select(i);
-////            cerr << "bit location: " << bit_location << endl;
-//
-//            // for each bit location, decoding the encoded runs that start from that location
-//            gbwt::size_type decc;
-//            gbwt::size_type ind = 0;
-//
-//            decc = gbwt::ByteCode::read(encoded_runs, bit_location);
-//
-//            size_t decoded_offset = decc & ((1LL << 10) - 1);
-//            bool decoded_flag = (decc >> 10) & 0x1;
-//            uint8_t decoded_length = (decc >> 11) & 0xFF;
-//            int64_t decoded_node_id = (decc >> 19);
-//
-//
-//                // Print the decoded values
-////            std::cerr << "Decoded offset: " << decoded_offset << std::endl;
-////            std::cerr << "Decoded flag: " << decoded_flag << std::endl;
-////            std::cerr << "Decoded length: " << static_cast<int>(decoded_length) << std::endl;
-////            std::cerr << "Decoded node ID: " << decoded_node_id << std::endl;
-//
-//            unique_positions.insert(gbwtgraph::Position::encode(vg::pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
-//
-//        }
-
-//        std::cout << (end_bit_index - first_bit_index + 1) << '\t' << unique_positions.size() << '\t' << (double)(end_bit_index - first_bit_index + 1)/((double)unique_positions.size()) << std::endl;
-//        std::cerr << "Number of unique positions in the interval: " << unique_positions.size() << std::endl;
+    // this function just store the encoded_runs vector in the output stream
+    void TagArray::store_blocks(std::ostream &out) {
+        size_t size = encoded_runs.size();
+        out.write(reinterpret_cast<const char *>(encoded_runs.data()), size * sizeof(gbwt::byte_type));
 
 
 
-
-
+        cerr << "Finished storing blocks" << endl;
 
     }
+
+
+    // Function to load a run starting from a specified position in the file and return the start of the next run
+    void TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
+        // Seek to the start position of the current run
+        in.seekg(next_block_start, std::ios::beg);
+        if (in.fail()) {
+            throw std::runtime_error("Failed to seek to run start position");
+        }
+
+        std::vector<gbwt::byte_type> current_run;
+        gbwt::byte_type byte;
+
+        size_t run_start_position = next_block_start;
+        size_t run_end_position = run_start_position;
+
+        // Read bytes until we reach the end of the current run
+        while (in.read(reinterpret_cast<char*>(&byte), sizeof(gbwt::byte_type))) {
+            current_run.push_back(byte);
+            ++run_end_position;
+            if (!(byte & 0x80)) { // Check if the last bit is 1, marking the end of the run
+                break;
+            }
+        }
+
+        // Update next_block_start for the next call
+        next_block_start = run_end_position;
+
+        cerr << "Loaded run from position " << run_start_position << " to " << run_end_position << endl;
+
+        // Decode the current run data using gbwt::ByteCode::read
+        gbwt::size_type decc;
+        std::uint64_t bit_location = 0; // Starting bit location in current_run
+
+        decc = gbwt::ByteCode::read(current_run, bit_location); // Decode at bit location
+
+        // Extract values from the decoded byte
+        size_t decoded_offset = decc & ((1LL << 10) - 1);
+        bool decoded_flag = (decc >> 10) & 0x1;
+        uint8_t decoded_length = (decc >> 11) & 0xFF;
+        int64_t decoded_node_id = (decc >> 19);
+
+        // Output the decoded information for debugging
+        cerr << "Decoded offset: " << decoded_offset << endl;
+        cerr << "Decoded flag: " << decoded_flag << endl;
+        cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
+        cerr << "Decoded node ID: " << decoded_node_id << endl;
+    }
+
+
 
 }
 
