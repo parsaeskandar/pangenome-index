@@ -14,6 +14,7 @@
 #include "../../deps/grlBWT/scripts/fm_index.h"
 #include <gbwt/algorithms.h>
 #include <gbwt/internal.h>
+#include "utils.hpp"
 
 namespace panindexer {
 
@@ -176,6 +177,19 @@ namespace panindexer {
 
             }
 
+            // return the run id of the pos in the block, also update the current_position to the position in the block
+            size_t run_id_at(size_t pos, size_t& current_position) const {
+                size_t run_num = 0;
+                while (run_num < this->runs.size()) {
+                    if (current_position + this->runs[run_num].second > pos) {
+                        break;
+                    }
+                    current_position += this->runs[run_num].second;
+                    run_num++;
+                }
+                return run_num;
+            }
+
             size_t bwt_char_at(size_t pos){
                 size_t sym, freq;
                 size_t offset = 0;
@@ -200,6 +214,39 @@ namespace panindexer {
                     std::cerr << this->character_cum_ranks[i] << std::endl;
                 }
             }
+
+            size_type serialize(std::ostream &out, sdsl::structure_tree_node *v = nullptr, std::string name = "") const {
+                sdsl::structure_tree_node *child = sdsl::structure_tree::add_child(v, name, sdsl::util::class_name(*this));
+                size_type written_bytes = 0;
+                written_bytes += this->character_cum_ranks.serialize(out, child, "character_cum_ranks");
+
+
+                size_t runs_size = runs.size();
+                written_bytes += sdsl::write_member(runs_size, out, nullptr, "runs_size");
+
+                for (const auto &run : runs) {
+                    written_bytes += sdsl::write_member(run.first, out, nullptr, "run_first");
+                    written_bytes += sdsl::write_member(run.second, out, nullptr, "run_second");
+                }
+
+                sdsl::structure_tree::add_size(child, written_bytes);
+                return written_bytes;
+
+            };
+
+
+            void load(std::istream &in) {
+                this->character_cum_ranks.load(in);
+                size_t runs_size;
+                in.read(reinterpret_cast<char*>(&runs_size), sizeof(runs_size));
+                this->runs.resize(runs_size); // Resize the vector to hold the loaded data
+                for (size_t i = 0; i < runs_size; ++i) {
+                    in.read(reinterpret_cast<char*>(&this->runs[i].first), sizeof(this->runs[i].first));
+                    in.read(reinterpret_cast<char*>(&this->runs[i].second), sizeof(this->runs[i].second));
+                }
+            }
+
+
 
             const sdsl::int_vector<64>& get_cum_ranks() const { return this->character_cum_ranks; }
 
@@ -240,8 +287,6 @@ namespace panindexer {
         // If last[i] = 1, last_to_run[last_rank(i)] is the identifier of the run.
         sdsl::int_vector<0> last_to_run;
 
-        // Run identifier of the first run in each block.
-        sdsl::int_vector<0> comp_to_run;
 
 //------------------------------------------------------------------------------
 
@@ -454,12 +499,6 @@ namespace panindexer {
         size_t bwt_char_at(size_t idx);
 
 
-//
-//        size_type globalRunId(node_type node, size_type run_id) const
-//        {
-//            return this->comp_to_run[this->index->toComp(node)] + run_id;
-//        }
-//
         size_type getSample(size_type run_id) const
         {
             return this->samples[run_id];

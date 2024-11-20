@@ -217,7 +217,7 @@ namespace panindexer {
 
 
     // Function to load a run starting from a specified position in the file and return the start of the next run
-    void TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
+    std::pair<pos_t, uint8_t> TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
         // Seek to the start position of the current run
         in.seekg(next_block_start, std::ios::beg);
         if (in.fail()) {
@@ -255,6 +255,10 @@ namespace panindexer {
         bool decoded_flag = (decc >> 10) & 0x1;
         uint8_t decoded_length = (decc >> 11) & 0xFF;
         int64_t decoded_node_id = (decc >> 19);
+
+        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
+        std::pair<pos_t, uint8_t> result = std::make_pair(graph_pos, decoded_length);
+
 
         // Output the decoded information for debugging
         cerr << "Decoded offset: " << decoded_offset << endl;

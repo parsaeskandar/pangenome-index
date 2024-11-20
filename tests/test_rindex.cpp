@@ -102,7 +102,8 @@ namespace {
         std::string filename = "../test_data/small_test_nl.txt";
         auto sequence_indices = readFileAndCreateBWTWithIndices(filename);
 
-        std::string rlbwt_file = "../test_data/small_test.rl_bwt";
+
+        std::string rlbwt_file = "../test_data/small_test_nl.rl_bwt";
         FastLocate r_index(rlbwt_file);
 
 
@@ -112,7 +113,7 @@ namespace {
     }
 
     TEST(RINDEX_Test, Locate_medium_test) {
-        std::string filename = "../test_data/med_test_nl.txt";
+        std::string filename = "../test_data/med_test.txt";
         auto sequence_indices = readFileAndCreateBWTWithIndices(filename);
 
         std::string rlbwt_file = "../test_data/med_test.rl_bwt";
@@ -132,6 +133,53 @@ namespace {
 
         auto x = r_index.decompressDA();
         ASSERT_EQ(x, sequence_indices) << "Invalid Locate results from the r-index";
+
+    }
+
+    TEST(FMINDEX_Test, small_test){
+        std::string filename = "../test_data/x.rl_bwt";
+        fm_index index(filename);
+        FastLocate r_index(filename);
+
+        for (int j = 0; j < 3; j++){
+            auto start_fm = j;
+            auto start_r = j;
+            auto a = index.lf(start_fm);
+            auto b = r_index.psi(start_r);
+
+            start_fm = a.second;
+            auto fm_char = a.first;
+            start_r = b.second;
+            auto r_char = b.first;
+
+            int i = 0;
+            while (r_char != NENDMARKER && fm_char != NENDMARKER){
+                std::cerr << i << " " << start_fm << " " << start_r << std::endl;
+                ASSERT_EQ(fm_char, r_char) << "Invalid LF results from the FM-index and the r-index";
+                ASSERT_EQ(start_fm, start_r) << "Invalid LF results from the FM-index and the r-index";
+                a = index.lf(start_fm);
+                b = r_index.psi(start_r);
+                start_fm = a.second;
+                fm_char = a.first;
+                start_r = b.second;
+                r_char = b.first;
+                i++;
+            }
+
+
+
+        }
+
+
+
+
+
+
+
+
+
+
+
 
     }
 

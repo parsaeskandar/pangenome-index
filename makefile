@@ -44,7 +44,7 @@ endif
 
 
 
-CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg -Ideps/grlBWT/include
+CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg -Ideps/grlBWT/include -UNDEBUG
 
 
 HEADERS=$(wildcard include/pangenome_index/*.hpp)

@@ -13,6 +13,7 @@
 #include <bitset>
 #include <stdexcept>
 #include "bplus_tree.hpp"
+#include <gbwtgraph/utils.h>
 //#include <vg/io/vpkg.hpp>
 
 
@@ -34,7 +35,7 @@ namespace panindexer {
         void query(size_t start, size_t end);
 
         void store_blocks(std::ostream& out);
-        void load_block_at(std::istream& in, size_t &next_block_start);
+        std::pair<pos_t, uint8_t> load_block_at(std::istream& in, size_t &next_block_start);
 
     private:
 

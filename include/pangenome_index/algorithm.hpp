@@ -19,6 +19,7 @@
 #include <gbwt/internal.h>
 #include "r-index.hpp"
 #include "gbwtgraph/algorithms.h"
+#include "utils.hpp"
 
 
 
@@ -29,6 +30,7 @@ using namespace gbwtgraph;
 
 
 namespace panindexer {
+
 
 
     template<typename T>
@@ -313,9 +315,11 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
 
             // moving backwards
-            bwt_index = idx.LF(bwt_index);
-            auto first = idx.F_at(bwt_index);
-            if (first == ENDMARKER) { // TODO: check this
+            auto temp = idx.psi(bwt_index);
+            bwt_index = temp.second;
+            auto first = temp.first;
+
+            if (first == NENDMARKER) {
                 cerr << "The end of the sequence at bwt index " << bwt_index << endl;
                 break;
             }
@@ -331,6 +335,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
             }
 
             // traverse the nodes on the graph to get the same base
+            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
             assert(first == gbz.graph.get_base(current_node, in_node_index));
 
             in_node_index--;

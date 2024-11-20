@@ -6,6 +6,8 @@
 #include "../include/pangenome_index/r-index.hpp"
 
 
+//TODO: MAKE THE copy, swap, ... function with the new variables
+
 namespace panindexer {
     /*
   Copyright (c) 2020, 2021, 2022 Jouni Siren
@@ -42,6 +44,7 @@ namespace panindexer {
 
     constexpr size_type
     FastLocate::NO_POSITION;
+
 
 //------------------------------------------------------------------------------
 
@@ -125,7 +128,6 @@ namespace panindexer {
             this->samples.swap(another.samples);
             this->last.swap(another.last);
             this->last_to_run.swap(another.last_to_run);
-            this->comp_to_run.swap(another.comp_to_run);
         }
     }
 
@@ -143,7 +145,6 @@ namespace panindexer {
             this->samples = std::move(source.samples);
             this->last = std::move(source.last);
             this->last_to_run = std::move(source.last_to_run);
-            this->comp_to_run = std::move(source.comp_to_run);
         }
         return *this;
     }
@@ -157,7 +158,22 @@ namespace panindexer {
         written_bytes += this->samples.serialize(out, child, "samples");
         written_bytes += this->last.serialize(out, child, "last");
         written_bytes += this->last_to_run.serialize(out, child, "last_to_run");
-        written_bytes += this->comp_to_run.serialize(out, child, "comp_to_run");
+
+
+        written_bytes += this->sym_map.serialize(out, child, "sym_map");
+        written_bytes += this->C.serialize(out, child, "C");
+
+        written_bytes += this->blocks_start_pos.serialize(out, child, "blocks_start_pos");
+        written_bytes += sdsl::write_member(sequence_size, out, child, "sequence_size");
+
+
+        // write the number of blocks
+        size_t blocks_size = this->blocks.size();
+        written_bytes += sdsl::write_member(blocks_size, out, child, "blocks_size");
+
+        for (const auto &block : blocks) {
+            written_bytes += block.serialize(out, child, "block");
+        }
 
         sdsl::structure_tree::add_size(child, written_bytes);
         return written_bytes;
@@ -169,10 +185,26 @@ namespace panindexer {
         this->header.check();
         this->header.setVersion(); // Update to the current version.
 
+
         this->samples.load(in);
         this->last.load(in);
         this->last_to_run.load(in);
-        this->comp_to_run.load(in);
+
+        this->sym_map.load(in);
+        this->C.load(in);
+
+        sdsl::load(this->blocks_start_pos, in);
+
+        sdsl::read_member(this->sequence_size, in);
+
+        size_t blocks_size;
+        sdsl::read_member(blocks_size, in);
+        this->blocks.resize(blocks_size);
+
+        for (size_t i = 0; i < blocks_size; ++i) {
+            this->blocks[i].load(in);
+        }
+
     }
 
     void
@@ -181,7 +213,6 @@ namespace panindexer {
         this->samples = source.samples;
         this->last = source.last;
         this->last_to_run = source.last_to_run;
-        this->comp_to_run = source.comp_to_run;
     }
 
 //------------------------------------------------------------------------------
@@ -197,9 +228,9 @@ namespace panindexer {
             size_t sym, freq;
             this->buff_reader->read_run(i, sym, freq);
             offset += freq;
-            runs_seen += (sym == ENDMARKER ? freq : 1); // each endmarker is a separate run
+            runs_seen += (sym == NENDMARKER ? freq : 1); // each endmarker is a separate run
             if (offset > idx) {
-                if (sym == ENDMARKER) {
+                if (sym == NENDMARKER) {
                     run.first = run.second = idx;
                     run_id = runs_seen - (offset - idx);
                 } else {
@@ -308,13 +339,13 @@ namespace panindexer {
     }
 
 
-    // This function returns the exact number of runs, considering that each ENDMARKER is a separate run
+    // This function returns the exact number of runs, considering that each NENDMARKER is a separate run
     size_type FastLocate::total_runs() {
         size_t runs = 0;
         for (size_t i = 0; i < this->buff_reader->size(); i++) {
             size_t sym, freq;
             this->buff_reader->read_run(i, sym, freq);
-            runs += (sym == ENDMARKER ? freq : 1);
+            runs += (sym == NENDMARKER ? freq : 1);
         }
         return runs;
     }
@@ -340,8 +371,8 @@ namespace panindexer {
         size_type total_runs = this->total_runs();
         auto n_seq = this->tot_strings();
 
-        std::cerr << this->total_runs() / this->block_size << std::endl;
-        this->blocks.resize((this->total_runs() / this->block_size) + 1);
+        std::cerr << total_runs / this->block_size << std::endl;
+        this->blocks.resize((total_runs / this->block_size) + 1);
 
 
         size_t run_iterator = 0;
@@ -380,7 +411,7 @@ namespace panindexer {
 
 
             // handling each endmarker as a separate run
-            if (sym == ENDMARKER) {
+            if (sym == NENDMARKER) {
                 // in this case we just add the endmarker run to the block
                 if (run_nums + freq < this->block_size) {
                     run_nums += freq;
@@ -392,7 +423,8 @@ namespace panindexer {
                 } else {
                     // in this case we got to add the endmarkers to the next block too
                     // adding the endmarkers to the current block
-                    std::cerr << this->block_size - run_nums << std::endl;
+                    std::cerr << "current freq of endmarker " << freq << std::endl;
+                    std::cerr << this->block_size - run_nums << " extra runs in the ENDMARKER case" << std::endl;
                     for (size_t i = 0; i < (this->block_size - run_nums); i++) {
 //                        std::cerr << "adding the endmarker to the current block" << std::endl;
                         cumulative_freq[this->sym_map[sym]] += 1;
@@ -401,6 +433,8 @@ namespace panindexer {
                     }
 
                     auto remaining_freq = freq - (this->block_size - run_nums);
+
+                    std::cerr << "remaining freq " << remaining_freq << std::endl;
 
                     run_nums += this->block_size - run_nums;
                     assert(run_nums == this->block_size);
@@ -440,6 +474,7 @@ namespace panindexer {
                                 run_buff.push_back({sym, 1});
                                 run_nums += 1;
                             }
+                            this->blocks[current_block_id].set_runs(run_buff);
                         }
 
                     }
@@ -537,7 +572,7 @@ namespace panindexer {
             for (size_type i = 1; i < n_seq; i++) {
                 auto curr = this->psi(i);
 
-                if (curr.first == ENDMARKER || curr.first != prev.first) {
+                if (curr.first == NENDMARKER || curr.first != prev.first) {
                     run_id++;
                     prev = curr;
                 }
@@ -546,14 +581,23 @@ namespace panindexer {
 
         }
 
+        // printing the endmarker runs
+        for (size_t i = 0; i < endmarker_runs.size(); i++) {
+            std::cerr << endmarker_runs[i] << " ";
+        }
+
 
         // Extract the samples from each sequence.
         double extract_start = readTimer();
         if (Verbosity::level >= Verbosity::FULL) {
             std::cerr << "FastLocate::FastLocate(): Extracting head/tail samples" << std::endl;
         }
+
+        // running with how many threads
+        std::cerr << omp_get_max_threads() << std::endl;
 #pragma omp parallel for schedule(dynamic, 1)
         for (size_type i = 0; i < n_seq; i++) {
+
 
             std::vector <sample_record> head_buffer, tail_buffer;
             size_type seq_offset = 0, run_id = endmarker_runs[i];
@@ -566,7 +610,10 @@ namespace panindexer {
             auto curr = this->psi(i);
             seq_offset++;
             range_type run(0, 0);
-            while (curr.first != ENDMARKER) {
+
+            while (curr.first != NENDMARKER) {
+
+
                 auto next = this->psi(curr.second); // TODO: make a function that does these two lines at once
                 this->bwt_index_run_id(curr.second, run, run_id);
 
@@ -584,6 +631,9 @@ namespace panindexer {
 
             for (sample_record &record: head_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
             for (sample_record &record: tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
+
+            //
+            std::cerr << "completed a sub job for seq" << i << std::endl;
 
 #pragma omp critical
             {
@@ -689,24 +739,20 @@ namespace panindexer {
         size_type offset_of_first = state.first;
         if (first == NO_POSITION) // TODO: check this
         {
-
+            auto iter = this->blocks_start_pos.predecessor(state.first);
             size_type run_id = 0;
             size_t offset = 0;
 
-            for (size_t i = 0; i < buff_reader->size(); i++) {
-                size_t sym, freq;
-                this->buff_reader->read_run(i, sym, freq);
-                offset += freq;
-                if (offset > state.first) {
-                    run_id = i;
-                    offset_of_first = offset - freq;
-                    break;
-                }
+            size_t cur_pos = 0;
 
-            }
-
+            auto run_num = this->blocks[iter->first].run_id_at(state.first - iter->second, cur_pos);
+            run_id = iter->first * this->block_size + run_num;
+            offset_of_first = iter->second + cur_pos;
             first = this->getSample(run_id);
+
         }
+
+
 
         // Iterate until the start of the range and locate the first occurrence.
         while (offset_of_first < state.first) {

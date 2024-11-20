@@ -21,11 +21,10 @@
 #include <mutex>
 #include <condition_variable>
 
-
+#ifndef TIME
 #define TIME 1
-
+#endif
 using namespace std;
-using namespace ri;
 using namespace gbwtgraph;
 using namespace panindexer;
 
