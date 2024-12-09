@@ -54,6 +54,8 @@ int main(int argc, char **argv) {
 
 
     FastLocate idx(rlbwt_file);
+//    idx.serialize(std::cout);
+//    exit(0);
 //    FastLocate idx;
 //    std::ifstream in(rlbwt_file);
 //    idx.load(in);

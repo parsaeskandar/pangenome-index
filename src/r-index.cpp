@@ -799,8 +799,7 @@ namespace panindexer {
 
 ////------------------------------------------------------------------------------
 //
-    size_type FastLocate::locateNext(size_type
-    prev) const {
+    size_type FastLocate::locateNext(size_type prev) const {
     auto iter = this->last.predecessor(prev);
     return this->samples[this->last_to_run[iter->first] + 1] + (prev - iter->second);
 }

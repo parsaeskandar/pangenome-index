@@ -295,8 +295,6 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
 #pragma omp parallel for
     for (int seq_num = 0; seq_num < number_of_sequences; ++seq_num) {
-//        cerr << "running for sequence number " << seq_num << endl;
-//        cerr << traverse << endl;
 
         auto seq_graph_nodes = gbz.index.extract(seq_num * 2);
         auto bwt_index = end_of_seq[seq_num].first;
@@ -335,7 +333,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
             }
 
             // traverse the nodes on the graph to get the same base
-            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
+//            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
             assert(first == gbz.graph.get_base(current_node, in_node_index));
 
             in_node_index--;
@@ -389,12 +387,17 @@ std::unordered_map<nid_t, size_t> node_to_component(GBZ &gbz){
     auto weakly_connected_components = gbwtgraph::weakly_connected_components(gbz.graph);
     std::unordered_map<nid_t, size_t> node_to_component;
     size_t node_count = gbz.graph.get_node_count();
+    std::cerr << "number of weak components " << weakly_connected_components.size() << std::endl;
+    std::cerr << "The number of nodes in the graph is " << node_count << std::endl;
     node_to_component.reserve(node_count);
 
     for (size_t i = 0; i < weakly_connected_components.size(); i++) {
+        cerr << "weak comp " << i << endl;
         const std::vector<nid_t>& component = weakly_connected_components[i];
 
-        for(nid_t node_id : component) { node_to_component[node_id] = i; }
+        for(nid_t node_id : component) {
+            cerr << node_id << endl;
+            node_to_component[node_id] = i; }
     }
 
     return node_to_component;

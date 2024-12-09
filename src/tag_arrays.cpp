@@ -89,6 +89,38 @@ namespace panindexer {
         cerr << "Finished serializing" << endl;
     }
 
+    void TagArray::serialize_run_by_run(const std::vector<std::pair<pos_t, uint8_t>>& tag_runs, const std::string& file_name) {
+        std::ofstream out(file_name, std::ios::binary | std::ios::app);
+        if (!out.is_open()) {
+            std::cerr << "Error: Cannot open file for writing.\n";
+            return;
+        }
+
+        for (const auto& [value, run_length] : tag_runs) {
+            out.write(reinterpret_cast<const char*>(&value), sizeof(pos_t));
+            out.write(reinterpret_cast<const char*>(&run_length), sizeof(uint8_t));
+        }
+
+        out.close();
+    }
+
+    void TagArray::deserialize_run_by_run(const std::string& file_name) {
+        std::ifstream in(file_name, std::ios::binary);
+        if (!in.is_open()) {
+            std::cerr << "Error: Cannot open file for reading.\n";
+        }
+
+        pos_t value;
+        uint8_t run_length;
+
+        while (in.read(reinterpret_cast<char*>(&value), sizeof(pos_t))) {
+            in.read(reinterpret_cast<char*>(&run_length), sizeof(uint8_t));
+            this->tag_runs.emplace_back(value, run_length);
+        }
+
+        in.close();
+    }
+
 
 
 
@@ -221,6 +253,7 @@ namespace panindexer {
         // Seek to the start position of the current run
         in.seekg(next_block_start, std::ios::beg);
         if (in.fail()) {
+            cerr << "Failed to seek to run start position" << endl;
             throw std::runtime_error("Failed to seek to run start position");
         }
 
@@ -242,7 +275,13 @@ namespace panindexer {
         // Update next_block_start for the next call
         next_block_start = run_end_position;
 
-        cerr << "Loaded run from position " << run_start_position << " to " << run_end_position << endl;
+        if (run_start_position == run_end_position) {
+            std::cerr << "Reached the end of file " << std::endl;
+            // returning an empty pair
+            return std::make_pair(pos_t{0, 0, 0}, 0);
+        }
+
+//        cerr << "Loaded run from position " << run_start_position << " to " << run_end_position << endl;
 
         // Decode the current run data using gbwt::ByteCode::read
         gbwt::size_type decc;
@@ -261,10 +300,16 @@ namespace panindexer {
 
 
         // Output the decoded information for debugging
-        cerr << "Decoded offset: " << decoded_offset << endl;
-        cerr << "Decoded flag: " << decoded_flag << endl;
-        cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
-        cerr << "Decoded node ID: " << decoded_node_id << endl;
+//        cerr << "Decoded offset: " << decoded_offset << endl;
+//        cerr << "Decoded flag: " << decoded_flag << endl;
+//        cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
+//        cerr << "Decoded node ID: " << decoded_node_id << endl;
+
+
+        if (result.second == 0) {
+            cerr << "Decoded length is 0" << endl;
+        }
+        return result;
     }
 
 
