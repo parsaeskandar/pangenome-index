@@ -15,6 +15,7 @@
 #include <gbwt/algorithms.h>
 #include <gbwt/internal.h>
 #include "utils.hpp"
+#include <condition_variable>
 
 namespace panindexer {
 
@@ -122,6 +123,10 @@ namespace panindexer {
 
             void set_runs(std::vector<std::pair<size_t, size_t>> &source){
                 this->runs = source;
+            }
+
+            std::pair<size_t, size_t> get_run(size_t run_id) const {
+                return this->runs[run_id];
             }
 
             void set_character_cum_ranks(std::vector<size_t> &source){
@@ -445,6 +450,8 @@ namespace panindexer {
 
         // first is the symbol and the second is the next position index (backtrack)
         std::pair<size_t, size_t> psi(size_t idx);
+
+        std::pair <size_t, size_t> psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position);
 
         size_type total_runs();
 

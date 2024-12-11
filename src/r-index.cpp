@@ -243,6 +243,7 @@ namespace panindexer {
         }
     }
 
+
     size_t FastLocate::bwt_char_at(size_t idx) {
         auto iter = this->blocks_start_pos.predecessor(idx);
         auto res = this->blocks[iter->first].bwt_char_at(idx - iter->second);
@@ -254,6 +255,15 @@ namespace panindexer {
         size_t symbol = this->bwt_char_at(idx);
         return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol)};
     }
+
+    std::pair <size_t, size_t> FastLocate::psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position) {
+        run_id = 0;
+        current_position = 0;
+        size_t symbol = this->bwt_char_at(idx);
+        size_t next_pos = this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol, run_id, current_position);
+        return {symbol, next_pos};
+    }
+
 
     // current_position Tracks how far we've gone through the BWT
     // The number includes the index symbol too
@@ -423,8 +433,8 @@ namespace panindexer {
                 } else {
                     // in this case we got to add the endmarkers to the next block too
                     // adding the endmarkers to the current block
-                    std::cerr << "current freq of endmarker " << freq << std::endl;
-                    std::cerr << this->block_size - run_nums << " extra runs in the ENDMARKER case" << std::endl;
+//                    std::cerr << "current freq of endmarker " << freq << std::endl;
+//                    std::cerr << this->block_size - run_nums << " extra runs in the ENDMARKER case" << std::endl;
                     for (size_t i = 0; i < (this->block_size - run_nums); i++) {
 //                        std::cerr << "adding the endmarker to the current block" << std::endl;
                         cumulative_freq[this->sym_map[sym]] += 1;
@@ -434,7 +444,7 @@ namespace panindexer {
 
                     auto remaining_freq = freq - (this->block_size - run_nums);
 
-                    std::cerr << "remaining freq " << remaining_freq << std::endl;
+//                    std::cerr << "remaining freq " << remaining_freq << std::endl;
 
                     run_nums += this->block_size - run_nums;
                     assert(run_nums == this->block_size);
@@ -444,7 +454,7 @@ namespace panindexer {
 
                     auto block_fill = remaining_freq / this->block_size;
 
-                    std::cerr << "block fill " << block_fill << std::endl;
+//                    std::cerr << "block fill " << block_fill << std::endl;
                     for (size_t i = 0; i < block_fill + 1; i++) {
                         run_buff.clear();
                         current_block_id++;
@@ -598,6 +608,8 @@ namespace panindexer {
 #pragma omp parallel for schedule(dynamic, 1)
         for (size_type i = 0; i < n_seq; i++) {
 
+            std::cerr << "Starting a sub job for seq" << i << std::endl;
+
 
             std::vector <sample_record> head_buffer, tail_buffer;
             size_type seq_offset = 0, run_id = endmarker_runs[i];
@@ -614,8 +626,25 @@ namespace panindexer {
             while (curr.first != NENDMARKER) {
 
 
-                auto next = this->psi(curr.second); // TODO: make a function that does these two lines at once
-                this->bwt_index_run_id(curr.second, run, run_id);
+//                auto next1 = this->psi(curr.second); // TODO: make a function that does these two lines at once
+//                range_type run1(0, 0);
+//                size_type run_id1 = 0;
+                size_t temp_run_id = 0;
+                size_t tem_cur = 0;
+//                this->bwt_index_run_id(curr.second, run1, run_id1);
+                auto next = this->psi_and_run_id(curr.second, temp_run_id, tem_cur);
+                std::pair tt = this->blocks[(temp_run_id / this->block_size)].get_run(temp_run_id % this->block_size);
+                run.first = tem_cur;
+                run.second = tem_cur + tt.second - 1;
+
+                run_id = temp_run_id;
+
+//                assert(1 == 2);
+//                assert(static_cast<size_t>(run_id1) == temp_run_id);
+////                std::cerr << static_cast<size_t>(run1.first) << " " << run.first << std::endl;
+//                assert(static_cast<size_t>(run1.first) == run.first);
+//                std::cerr << static_cast<size_t>(run1.second) << " " << run.second << std::endl;
+//                assert(static_cast<size_t>(run1.second) == run.second);
 
                 // have to find which run the next.first belongs to
                 if (curr.second == run.first) {
@@ -626,6 +655,10 @@ namespace panindexer {
                 }
                 curr = next;
                 seq_offset++;
+
+                if (seq_offset % 10000000 == 0) {
+                    std::cerr << "seq " << i << " offset " << seq_offset << std::endl;
+                }
             }
 
 
@@ -633,7 +666,7 @@ namespace panindexer {
             for (sample_record &record: tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
 
             //
-            std::cerr << "completed a sub job for seq" << i << std::endl;
+            std::cerr << "completed a sub job for seq" << i  << " with len " << seq_offset << std::endl;
 
 #pragma omp critical
             {

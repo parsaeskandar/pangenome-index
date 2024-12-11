@@ -13,6 +13,8 @@
 #include "pangenome_index/algorithm.hpp"
 #include "pangenome_index/tag_arrays.hpp"
 #include <gbwtgraph/utils.h>
+#include <iostream>
+#include <filesystem>
 
 
 

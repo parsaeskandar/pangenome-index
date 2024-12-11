@@ -136,6 +136,18 @@ namespace {
 
     }
 
+    TEST(RINDEX_Test, Locate_N_test) {
+        std::string filename = "../test_data/N_test.txt";
+        auto sequence_indices = readFileAndCreateBWTWithIndices(filename);
+
+        std::string rlbwt_file = "../test_data/N_test.rl_bwt";
+        FastLocate r_index(rlbwt_file);
+
+        auto x = r_index.decompressDA();
+        ASSERT_EQ(x, sequence_indices) << "Invalid Locate results from the r-index";
+
+    }
+
     TEST(FMINDEX_Test, small_test){
         std::string filename = "../test_data/x.rl_bwt";
         fm_index index(filename);

@@ -228,9 +228,9 @@ int main(int argc, char **argv) {
     auto OCC = idx.OCC();
 
     //print all elements of the OCC array
-    for (size_t i = 0; i < OCC.size(); i++){
-        cerr << "OCC[" << i << "] = " << OCC[i] << endl;
-    }
+//    for (size_t i = 0; i < OCC.size(); i++){
+//        cerr << "OCC[" << i << "] = " << OCC[i] << endl;
+//    }
 
 
     // using the sort_end_of_seq function

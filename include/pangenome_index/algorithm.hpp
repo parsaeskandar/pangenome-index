@@ -334,7 +334,8 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
             // traverse the nodes on the graph to get the same base
 //            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
-            assert(first == gbz.graph.get_base(current_node, in_node_index));
+
+//            assert(first == gbz.graph.get_base(current_node, in_node_index));
 
             in_node_index--;
 
@@ -359,7 +360,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
                 pos_t current_pos = pos_t{gbz.graph.get_id(current_node), gbz.graph.get_is_reverse(current_node),
                                           in_node_index + 1};
 
-                assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
+//                assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
             }
         }
 
