@@ -388,16 +388,16 @@ std::unordered_map<nid_t, size_t> node_to_component(GBZ &gbz){
     auto weakly_connected_components = gbwtgraph::weakly_connected_components(gbz.graph);
     std::unordered_map<nid_t, size_t> node_to_component;
     size_t node_count = gbz.graph.get_node_count();
-    std::cerr << "number of weak components " << weakly_connected_components.size() << std::endl;
-    std::cerr << "The number of nodes in the graph is " << node_count << std::endl;
+//    std::cerr << "number of weak components " << weakly_connected_components.size() << std::endl;
+//    std::cerr << "The number of nodes in the graph is " << node_count << std::endl;
     node_to_component.reserve(node_count);
 
     for (size_t i = 0; i < weakly_connected_components.size(); i++) {
-        cerr << "weak comp " << i << endl;
+//        cerr << "weak comp " << i << endl;
         const std::vector<nid_t>& component = weakly_connected_components[i];
 
         for(nid_t node_id : component) {
-            cerr << node_id << endl;
+//            cerr << node_id << endl;
             node_to_component[node_id] = i; }
     }
 

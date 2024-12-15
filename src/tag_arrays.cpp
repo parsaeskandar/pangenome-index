@@ -161,7 +161,7 @@ namespace panindexer {
             }
 
             // print the size
-            cerr << "size: " << size << endl;
+//            cerr << "size: " << size << endl;
 
 
             encoded_runs.resize(size);

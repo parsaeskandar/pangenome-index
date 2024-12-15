@@ -40,6 +40,10 @@ namespace panindexer {
         void store_blocks(std::ostream& out);
         static std::pair<pos_t, uint8_t> load_block_at(std::istream& in, size_t &next_block_start);
 
+        vector<pair<pos_t, uint8_t>> get_tag_runs(){
+            return tag_runs;
+        };
+
     private:
 
         //

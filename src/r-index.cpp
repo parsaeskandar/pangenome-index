@@ -761,6 +761,7 @@ namespace panindexer {
     }
 
 
+
     std::vector <size_type>
     FastLocate::locate(range_type state, size_type first) const {
         std::vector <size_type> result;
