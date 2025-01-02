@@ -6,7 +6,6 @@
 // Created by seeskand on 9/13/24.
 //
 
-#include "../r-index/internal/r_index.hpp"
 #include "pangenome_index/bplus_tree.hpp"
 #include "pangenome_index/algorithm.hpp"
 #include "pangenome_index/tag_arrays.hpp"

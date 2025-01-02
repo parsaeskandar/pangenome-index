@@ -10,6 +10,9 @@
 
 namespace panindexer {
 
+    using nid_t = handlegraph::nid_t;
+    using offset_t = handlegraph::offset_t;
+
 
     TagArray::TagArray() {
         // Initialize the run_starts bit vector with the given size and set all bits to 0
@@ -96,7 +99,29 @@ namespace panindexer {
             return;
         }
 
+        // print the length of the tag_runs
+//        cerr << "tag_runs size: " << tag_runs.size() << endl;
+        int i = 0;
+
+//
+//        for (int l = 0; l < tag_runs.size(); l++) {
+//            // print the decoded values of the tag_runs.first
+//
+//            offset_t decoded_offset = offset(tag_runs[l].first);
+//            bool decoded_flag = is_rev(tag_runs[l].first);
+//            nid_t decoded_node_id = id(tag_runs[l].first);
+//
+//            cerr << decoded_node_id << " " << decoded_offset << " " << decoded_flag << endl;
+//            pos_t output = make_pos_t(decoded_node_id, decoded_offset, decoded_flag);
+//
+////            cerr << tag_runs[l].first << " " << int(tag_runs[l].second) << endl;
+//            out.write(reinterpret_cast<const char*>(&output), sizeof(pos_t));
+//            out.write(reinterpret_cast<const char*>(&tag_runs[l].second), sizeof(uint8_t));
+//        }
+
         for (const auto& [value, run_length] : tag_runs) {
+//            std::cerr << i << " " << value << " " << run_length << std::endl;
+//            i++;
             out.write(reinterpret_cast<const char*>(&value), sizeof(pos_t));
             out.write(reinterpret_cast<const char*>(&run_length), sizeof(uint8_t));
         }
@@ -247,6 +272,34 @@ namespace panindexer {
 
     }
 
+    void TagArray::store_blocks_sdsl(std::string filename) {
+
+        sdsl::int_vector_buffer<8> out(filename, std::ios::out);
+        for (gbwt::size_type value : encoded_runs) {
+            gbwt::ByteCode::write(out, value);
+        }
+        out.close();
+
+
+        cerr << "Finished storing blocks" << endl;
+    }
+
+    std::pair<pos_t, uint8_t> TagArray::decode_run(gbwt::size_type decc) {
+        size_t decoded_offset = decc & ((1LL << 10) - 1);
+        bool decoded_flag = (decc >> 10) & 0x1;
+        uint8_t decoded_length = (decc >> 11) & 0xFF;
+        int64_t decoded_node_id = (decc >> 19);
+
+        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
+        std::pair<pos_t, uint8_t> result = std::make_pair(graph_pos, decoded_length);
+
+        return result;
+    }
+
+
+
+    
+
 
     // Function to load a run starting from a specified position in the file and return the start of the next run
     std::pair<pos_t, uint8_t> TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
@@ -299,7 +352,7 @@ namespace panindexer {
         std::pair<pos_t, uint8_t> result = std::make_pair(graph_pos, decoded_length);
 
 
-        // Output the decoded information for debugging
+//         Output the decoded information for debugging
 //        cerr << "Decoded offset: " << decoded_offset << endl;
 //        cerr << "Decoded flag: " << decoded_flag << endl;
 //        cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;

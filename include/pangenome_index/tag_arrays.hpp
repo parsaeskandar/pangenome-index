@@ -19,8 +19,9 @@
 
 namespace panindexer {
 
-    using namespace std;
+//    using namespace std;
     using namespace gbwtgraph;
+    using handlegraph::pos_t;
 
 
     class TagArray {
@@ -39,6 +40,9 @@ namespace panindexer {
 
         void store_blocks(std::ostream& out);
         static std::pair<pos_t, uint8_t> load_block_at(std::istream& in, size_t &next_block_start);
+
+        void store_blocks_sdsl(std::string filename);
+        static std::pair<pos_t, uint8_t> decode_run(gbwt::size_type decc);
 
         vector<pair<pos_t, uint8_t>> get_tag_runs(){
             return tag_runs;

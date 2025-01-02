@@ -290,8 +290,8 @@ int main(int argc, char **argv) {
 //    tag_array.query(0, 100);
 
 //    tag_array.serialize(std::cout);
-    tag_array.store_blocks(std::cout);
-
+//    tag_array.store_blocks(std::cout);
+    tag_array.store_blocks_sdsl("sdsl_tag_array_x.tag");
 
 
 
