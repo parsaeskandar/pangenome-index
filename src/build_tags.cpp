@@ -37,7 +37,7 @@ int main(int argc, char **argv) {
     std::string graph_file = std::string(argv[1]);
 //    std::string index_file = std::string(argv[2]);
     std::string rlbwt_file = std::string(argv[2]);
-//    std::string temp_file = std::string(argv[3]);
+    std::string output_file = std::string(argv[3]);
 
     int threads = 8;
 //    omp_set_num_threads(threads);
@@ -291,7 +291,7 @@ int main(int argc, char **argv) {
 
 //    tag_array.serialize(std::cout);
 //    tag_array.store_blocks(std::cout);
-    tag_array.store_blocks_sdsl("sdsl_tag_array_x.tag");
+    tag_array.store_blocks_sdsl(output_file);
 
 
 
