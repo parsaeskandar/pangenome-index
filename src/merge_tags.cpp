@@ -184,7 +184,7 @@ private:
             current_nodes[i] = first_block.first;
             remaining_lengths[i] = first_block.second;
             // print the current node and len
-            std::cerr << "File " << i << " Block " << current_nodes[i] << " Remaining Length " << int(remaining_lengths[i]) << std::endl;
+//            std::cerr << "File " << i << " Block " << current_nodes[i] << " Remaining Length " << int(remaining_lengths[i]) << std::endl;
         }
     }
 
@@ -366,12 +366,12 @@ int main(int argc, char **argv) {
         current_node_of_files[i] = first_block.first;
         current_remaining_length_of_files[i] = first_block.second;
 
-        std::cerr << "The first block of file " << files[i] << " is " << first_block.first << " " << int(first_block.second) << std::endl;
+//        std::cerr << "The first block of file " << files[i] << " is " << first_block.first << " " << int(first_block.second) << std::endl;
 
         // get the component of the node of the first block
         size_t comp = node_to_comp_map[id(current_node_of_files[i])];
 
-        std::cerr << "The component of the first block of file is " << comp << std::endl;
+//        std::cerr << "The component of the first block of file is " << comp << std::endl;
         file_to_comp[i] = comp;
         comp_to_file[comp] = i;
     }
@@ -392,7 +392,7 @@ int main(int argc, char **argv) {
 
         // extracting the first node of the sequence component id
         seq_id_to_comp_id[i] = node_to_comp_map[gbwt::Node::id(seq_graph_nodes[0])];
-        std::cerr << "seq id " << i << " comp id " << seq_id_to_comp_id[i] << std::endl;
+//        std::cerr << "seq id " << i << " comp id " << seq_id_to_comp_id[i] << std::endl;
     }
     std::cerr << "The mapping from seq id to comp id is done" << std::endl;
 
@@ -504,6 +504,12 @@ int main(int argc, char **argv) {
     vector<pair<pos_t, uint8_t>> tag_runs_check;
     uint8_t one = 1;
 
+    std::ofstream out("whole_genome_tag_array_parallel_sdsl.tags", std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        std::cerr << "Error: Cannot open file for writing.\n";
+    }
+
+
     cerr << "Merging tags and creating the whole genome tag array indexing" << endl;
 
     for(size_t to_read = 0; to_read < threads && to_read < total_tags_count; to_read++){
@@ -517,7 +523,7 @@ int main(int argc, char **argv) {
         threads_list[thread_id].join();
         pos_t current_tag = thread_buffers[thread_id];
         // print the block
-        std::cerr << to_write << " Block " << current_tag << "from thread " << thread_id << std::endl;
+//        std::cerr << to_write << " Block " << current_tag << "from thread " << thread_id << std::endl;
 //        tags2[to_write] = current_tag;
         tags_batch[to_write % batch_size] = current_tag;
 
@@ -545,7 +551,7 @@ int main(int argc, char **argv) {
             if (to_write < total_tags_count - 1){
                 tag_runs2.pop_back();
             }
-            tag_array.serialize_run_by_run(tag_runs2, "whole_genome_tag_array_parallel_sdsl.tags");
+            tag_array.serialize_run_by_run(out, tag_runs2);
             tag_runs2.clear();
             current_run = 1;
             tag_runs2.push_back(temp);
@@ -566,6 +572,8 @@ int main(int argc, char **argv) {
             thread.join();
         }
     }
+
+    out.close();
 
     // have to tell the file_reader that we are done and to close the files
     // this is done by calling the destructor of the file_reader

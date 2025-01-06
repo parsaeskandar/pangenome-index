@@ -35,7 +35,7 @@ namespace panindexer {
         void load(std::istream& in);
         void query(size_t start, size_t end);
 
-        void serialize_run_by_run(const std::vector<std::pair<pos_t, uint8_t>>& tag_runs, const std::string& file_name);
+        void serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint8_t>>& tag_runs);
         void deserialize_run_by_run(const std::string& file_name);
 
         void store_blocks(std::ostream& out);

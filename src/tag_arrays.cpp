@@ -92,41 +92,11 @@ namespace panindexer {
         cerr << "Finished serializing" << endl;
     }
 
-    void TagArray::serialize_run_by_run(const std::vector<std::pair<pos_t, uint8_t>>& tag_runs, const std::string& file_name) {
-        std::ofstream out(file_name, std::ios::binary | std::ios::app);
-        if (!out.is_open()) {
-            std::cerr << "Error: Cannot open file for writing.\n";
-            return;
-        }
-
-        // print the length of the tag_runs
-//        cerr << "tag_runs size: " << tag_runs.size() << endl;
-        int i = 0;
-
-//
-//        for (int l = 0; l < tag_runs.size(); l++) {
-//            // print the decoded values of the tag_runs.first
-//
-//            offset_t decoded_offset = offset(tag_runs[l].first);
-//            bool decoded_flag = is_rev(tag_runs[l].first);
-//            nid_t decoded_node_id = id(tag_runs[l].first);
-//
-//            cerr << decoded_node_id << " " << decoded_offset << " " << decoded_flag << endl;
-//            pos_t output = make_pos_t(decoded_node_id, decoded_offset, decoded_flag);
-//
-////            cerr << tag_runs[l].first << " " << int(tag_runs[l].second) << endl;
-//            out.write(reinterpret_cast<const char*>(&output), sizeof(pos_t));
-//            out.write(reinterpret_cast<const char*>(&tag_runs[l].second), sizeof(uint8_t));
-//        }
-
+    void TagArray::serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint8_t>>& tag_runs) {
         for (const auto& [value, run_length] : tag_runs) {
-//            std::cerr << i << " " << value << " " << run_length << std::endl;
-//            i++;
             out.write(reinterpret_cast<const char*>(&value), sizeof(pos_t));
             out.write(reinterpret_cast<const char*>(&run_length), sizeof(uint8_t));
         }
-
-        out.close();
     }
 
     void TagArray::deserialize_run_by_run(const std::string& file_name) {
@@ -283,6 +253,19 @@ namespace panindexer {
 
         cerr << "Finished storing blocks" << endl;
     }
+
+//    void TagArray::store_blocks_sdsl_run_by_run(std::string filename, const std::vector<std::pair<pos_t, uint8_t>>& tag_runs) {
+//
+//
+//        // TODO: Implement this function
+//        sdsl::int_vector_buffer<8> out(filename, std::ios::out);
+//        for (gbwt::size_type value : encoded_runs) {
+//            gbwt::ByteCode::write(out, value);
+//        }
+//        out.close();
+//
+//    }
+
 
     std::pair<pos_t, uint8_t> TagArray::decode_run(gbwt::size_type decc) {
         size_t decoded_offset = decc & ((1LL << 10) - 1);
