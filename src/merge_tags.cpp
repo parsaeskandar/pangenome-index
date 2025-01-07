@@ -67,12 +67,12 @@ public:
     }
 
     // destructor
-    ~FileReader() {
-        for (size_t i = 0; i < files.size(); ++i) {
-            // if open close the file
-            file_buffers[i].close();
-        }
-    }
+//    ~FileReader() {
+//        for (size_t i = 0; i < files.size(); ++i) {
+//            // if open close the file
+//            file_buffers[i].close();
+//        }
+//    }
 //    FileReader(const std::vector<std::string>& files, size_t n_threads)
 //            : files(files), n_threads(n_threads), current_thread_id(0) {
 //        if (files.empty()) {
@@ -242,6 +242,7 @@ void extract_tag(const FastLocate &r_index, FileReader& reader, size_t thread_id
 //        int threads = omp_get_num_threads();
 //        std::cerr << thread_num << std::endl;
         current = r_index.locate_next_nth(current, thread_num);
+//        current = r_index.locate()
 //        if (current == 0) std::cerr << "current" << current << std::endl;
     }
 
@@ -387,6 +388,7 @@ int main(int argc, char **argv) {
     unordered_map<size_t, size_t> seq_id_to_comp_id;
 
     // get the first node of each path and get the component id of the node
+#pragma omp parallel for schedule(dynamic, 1)
     for (size_t i = 0; i < r_index.tot_strings(); i++){
         auto seq_graph_nodes = gbz.index.extract(i * 2);
 
@@ -496,7 +498,7 @@ int main(int argc, char **argv) {
     std::vector<std::thread> threads_list; threads_list.reserve(threads);
     std::vector<pos_t> thread_buffers(threads);
     std::vector<int> current_position(threads, 0);
-    int batch_size = 1024;
+    int batch_size = 2000;
     vector<pos_t> tags_batch(batch_size);
     vector<pair<pos_t, uint8_t>> tag_runs2;
 //    vector<pos_t> tags2(total_tags_count);
@@ -504,9 +506,23 @@ int main(int argc, char **argv) {
     vector<pair<pos_t, uint8_t>> tag_runs_check;
     uint8_t one = 1;
 
-    std::ofstream out("whole_genome_tag_array_parallel_sdsl.tags", std::ios::binary | std::ios::app);
+    const std::string filename = "whole_genome_tag_array_parallel_sdsl.tags";
+
+    // Check if the file exists and delete it
+    if (std::filesystem::exists(filename)) {
+        if (std::remove(filename.c_str()) != 0) {
+            std::cerr << "Error: Unable to delete the existing file.\n";
+            return 1; // Exit with error
+        } else {
+            std::cout << "Existing file deleted successfully.\n";
+        }
+    }
+
+    // Open the file for writing
+    std::ofstream out(filename, std::ios::binary | std::ios::app);
     if (!out.is_open()) {
         std::cerr << "Error: Cannot open file for writing.\n";
+        return 1; // Exit with error
     }
 
 
@@ -519,11 +535,14 @@ int main(int argc, char **argv) {
 
 
     for(size_t to_write = 0; to_write < total_tags_count; to_write++){
+        if (to_write % 1000 == 0){
+            std::cerr << "Writing tag " << to_write << std::endl;
+        }
         size_t thread_id = to_write % threads;
         threads_list[thread_id].join();
         pos_t current_tag = thread_buffers[thread_id];
         // print the block
-//        std::cerr << to_write << " Block " << current_tag << "from thread " << thread_id << std::endl;
+        std::cerr << to_write << " Block " << current_tag << "from thread " << thread_id << std::endl;
 //        tags2[to_write] = current_tag;
         tags_batch[to_write % batch_size] = current_tag;
 

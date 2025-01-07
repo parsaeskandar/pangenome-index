@@ -244,11 +244,17 @@ namespace panindexer {
 
     void TagArray::store_blocks_sdsl(std::string filename) {
 
-        sdsl::int_vector_buffer<8> out(filename, std::ios::out);
+
+//        std::cerr << "encoded runs size " << encoded_runs.size() << std::endl;
+        sdsl::int_vector_buffer<8> out(filename, std::ios::out | std::ios::trunc);
         for (gbwt::size_type value : encoded_runs) {
-            gbwt::ByteCode::write(out, value);
+            out.push_back(value);
+//            std::cerr << "value: " << value << std::endl;
+//            gbwt::ByteCode::write(out, value);4
+
+
         }
-        out.close();
+//        out.close();
 
 
         cerr << "Finished storing blocks" << endl;
