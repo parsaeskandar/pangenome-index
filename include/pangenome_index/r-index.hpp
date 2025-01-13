@@ -124,8 +124,23 @@ namespace panindexer {
                 this->runs = source;
             }
 
+            size_t last_run_size() const{
+
+                // print all items in the runs
+                for (size_t i = 0; i < this->runs.size(); i++) {
+                    std::cerr << this->runs[i].first << " " << this->runs[i].second << std::endl;
+                }
+                auto x = this->runs.back();
+                std::cerr << "here" << std::endl;
+                return this->runs.back().second;
+            }
+
             std::pair <size_t, size_t> get_run(size_t run_id) const {
                 return this->runs[run_id];
+            }
+
+            size_t get_run_nums() const {
+                return this->runs.size();
             }
 
             void set_character_cum_ranks(std::vector <size_t> &source) {
@@ -280,6 +295,7 @@ namespace panindexer {
         // store the size of the whole text
         size_t sequence_size;
 
+
         Header header;
 
         // (sequence id, sequence offset) samples at the start of each run.
@@ -411,6 +427,8 @@ namespace panindexer {
             return C[1] - C[0];
         }
 
+        size_t tot_runs() const;
+
         size_type locateFirst() const {
             return this->getSample(0);
 
@@ -500,6 +518,11 @@ namespace panindexer {
             size_t current_position = 0;
             return rankAt(pos, symbol, run_id, current_position);
         };
+
+        size_type getSample(size_type run_id) const {
+            return this->samples[run_id];
+        }
+
     private:
         void copy(const FastLocate &source);
 
@@ -510,9 +533,7 @@ namespace panindexer {
         size_t bwt_char_at(size_t idx);
 
 
-        size_type getSample(size_type run_id) const {
-            return this->samples[run_id];
-        }
+
 
 
 //    }; // class FastLocate

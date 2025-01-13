@@ -734,6 +734,10 @@ namespace panindexer {
 //        return SearchState(node, 0, record.size() - 1);
 //    }
 
+    size_t FastLocate::tot_runs() const {
+        return this->block_size * (this->blocks.size() - 1) + this->blocks.back().get_run_nums();
+    }
+
     range_type FastLocate::extend(range_type state, size_t sym, size_type &first) const {
 
         if (state.second < state.first || (this->sym_map[sym] == 0)) {
