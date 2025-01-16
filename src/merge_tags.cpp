@@ -60,6 +60,8 @@ public:
         file_end_reached.resize(files.size(), false);
         file_buffers.resize(files.size());
         tag_batches.resize(files.size());
+        current_index_tag_batch.resize(files.size(), 0);
+        current_length_tag_batch.resize(files.size(), 0);
         for (size_t i = 0; i < files.size(); ++i) {
             tag_batches[i].resize(batch_size);
         }
@@ -72,6 +74,13 @@ public:
         return files.size();
     }
 
+
+    pos_t get_first_tag(size_t fileIndex) {
+        return tag_batches[fileIndex][0].first;
+    }
+
+
+
     void closeAllFiles() {
         std::cerr << "Closing all files" << std::endl;
         for (size_t i = 0; i < file_buffers.size(); i++) {
@@ -83,7 +92,7 @@ public:
         file_buffers.clear(); // Optionally clear the vector to release all resources
         file_positions.clear(); // Clear positions as files are closed
         file_end_reached.clear(); // Clear end-of-file flags
-        tag_batches.clear(); // Clear tag buffers
+        tag_batches.clear(); // Clear tag buffersStarting creating the request list
     }
 
 
@@ -98,30 +107,61 @@ public:
         for (size_t i = 0; i < files.size(); i++) {
             size_t current_extracted = 0;
 
-            while (current_extracted < requests[i]) {
-                if (tag_batches[i].empty() || tag_batches[i][0].second == 0) {
-                    refill_tags();
-                    if (tag_batches[i].empty() || tag_batches[i][0].second == 0) {
-                        std::cerr << "No more tags to read from file: " << files[i] << std::endl;
-                        break;
-                    }
+
+            // TODO: the idea is to use a circular array
+            while (current_extracted < requests[i]){
+                if (current_length_tag_batch[i] == 0) {
+                    std::cerr << "No more tags is possible to read from file: " << files[i] << std::endl;
+                    break;
                 }
-                if (current_extracted + tag_batches[i][0].second <= requests[i]) {
+                if (current_extracted + tag_batches[i][current_index_tag_batch[i]].second <= requests[i]){
                     // add the whole tag run to the extracted tags and delete it from the tag_batches
-                    extracted_tags[i].push_back(tag_batches[i][0]);
+                    extracted_tags[i].push_back(tag_batches[i][current_index_tag_batch[i]]);
+                    current_extracted += tag_batches[i][current_index_tag_batch[i]].second;
+                    current_index_tag_batch[i]= (current_index_tag_batch[i] + 1) % batch_size;
+                    current_length_tag_batch[i]--;
+
                     // remove the first element of tag_batches[i]
-                    tag_batches[i].erase(tag_batches[i].begin());
-                    current_extracted += tag_batches[i][0].second;
+//                    tag_batches[i].erase(tag_batches[i].begin());
                 } else {
                     // add the first part of the tag run to the extracted tags and update the tag run in the tag_batches
-                    extracted_tags[i].push_back(std::make_pair(tag_batches[i][0].first, requests[i] - current_extracted));
-                    tag_batches[i][0].second -= (requests[i] - current_extracted);
+                    extracted_tags[i].push_back(std::make_pair(tag_batches[i][current_index_tag_batch[i]].first, requests[i] - current_extracted));
+                    tag_batches[i][current_index_tag_batch[i]].second -= (requests[i] - current_extracted);
                     current_extracted = requests[i];
                 }
 
             }
 
+
+
+//            while (current_extracted < requests[i]) {
+//                if (tag_batches[i].empty() || tag_batches[i][0].second == 0) {
+//                    // TODO: FIX THIS
+////                    refill_tags();
+//                    if (tag_batches[i].empty() || tag_batches[i][0].second == 0) {
+//                        std::cerr << "No more tags to read from file: " << files[i] << std::endl;
+//                        break;
+//                    }
+//                }
+//                if (current_extracted + tag_batches[i][0].second <= requests[i]) {
+//                    // add the whole tag run to the extracted tags and delete it from the tag_batches
+//                    extracted_tags[i].push_back(tag_batches[i][0]);
+//                    current_extracted += tag_batches[i][0].second;
+//                    // remove the first element of tag_batches[i]
+//                    tag_batches[i].erase(tag_batches[i].begin());
+//
+//                } else {
+//                    // add the first part of the tag run to the extracted tags and update the tag run in the tag_batches
+//                    extracted_tags[i].push_back(std::make_pair(tag_batches[i][0].first, requests[i] - current_extracted));
+//                    tag_batches[i][0].second -= (requests[i] - current_extracted);
+//                    current_extracted = requests[i];
+//                }
+//
+//            }
+
         }
+
+
         refill_tags();
 
         notifyNext(thread_id);
@@ -219,13 +259,14 @@ private:
             file_buffers[i] = std::move(in);
 
             // print the size of the files
-            std::cerr << "File size: " << file_buffers[i].size() << std::endl;
+//            std::cerr << "File size: " << file_buffers[i].size() << std::endl;
 
             // want to read batch_size of the tags from each file and store them in the tag_batches
 
             for (size_t j = 0; j < batch_size; j++) {
                 if (file_positions[i] >= file_buffers[i].size()) {
                     std::cerr << "End of file reached for: " << files[i] << std::endl;
+                    file_end_reached[i] = true;
                     break; // Stop reading if end of file is reached
                 }
 
@@ -233,6 +274,8 @@ private:
                         gbwt::ByteCode::read(file_buffers[i], file_positions[i])
                 );
                 tag_batches[i][j] = tag_block;
+                current_length_tag_batch[i]++;
+
             }
 
         }
@@ -240,36 +283,70 @@ private:
 
     // This function checks for all the tag files it has that if the current number of batch files are less than batch_size/3 it will refill the tags
     void refill_tags() {
-        std::cerr << "Refilling tags" << std::endl;
-        for (size_t i = 0; i < files.size(); i++) {
-            // Check if the remaining tags in the batch are less than batch_size / 3
-            if (tag_batches[i].size() < batch_size / 3) {
-                size_t remaining_tags = tag_batches[i].size();
-                // TODO: if there were memory issues, removing this might help
-                std::vector<std::pair<pos_t, uint8_t>> new_tags;
+//        std::cerr << "REFILL" << std::endl;
 
-                // Read more tags until we fill the batch or reach the end of the file
-                while (new_tags.size() + remaining_tags < batch_size) {
+
+        for (size_t i = 0; i < files.size(); i++){
+            if (current_length_tag_batch[i] < batch_size / 3 && !file_end_reached[i]) {
+                size_t remaining_tags = current_length_tag_batch[i];
+                std::vector<std::pair<pos_t, uint8_t>> new_tags;
+                size_t new_tags_size = 0;
+                while (new_tags_size + remaining_tags < batch_size) {
                     if (file_positions[i] >= file_buffers[i].size()) {
                         // End of file reached, stop reading
-                        std::cerr << "End of file reached for: " << files[i] << std::endl;
+                        file_end_reached[i] = true;
+                        std::cerr << "REFILL End of file reached for: " << files[i] << std::endl;
                         break;
                     }
 
                     auto tag_block = panindexer::TagArray::decode_run(
                             gbwt::ByteCode::read(file_buffers[i], file_positions[i])
                     );
-                    new_tags.push_back(tag_block);
+
+//                    new_tags.push_back(tag_block);
+                    tag_batches[i][(current_length_tag_batch[i] + current_index_tag_batch[i]) % batch_size] = tag_block;
+                    current_length_tag_batch[i]++;
+                    new_tags_size++;
                 }
 
-                std::cerr << "file pos in refill " << file_positions[i] << std::endl;
-                std::cerr << "file size " << file_buffers[i].buffersize() << std::endl;
-
-
-                // Add new tags to the existing batch
-                tag_batches[i].insert(tag_batches[i].end(), new_tags.begin(), new_tags.end());
+//                if (new_tags_size > 0) {
+//                    tag_batches[i].insert(tag_batches[i].end(), new_tags.begin(), new_tags.end());
+//                }
             }
         }
+//        std::cerr << "Refilling tags" << std::endl;
+//        for (size_t i = 0; i < files.size(); i++) {
+//            // Check if the remaining tags in the batch are less than batch_size / 3
+//            if (tag_batches[i].size() < batch_size / 3 && !file_end_reached[i]) {
+//                size_t remaining_tags = tag_batches[i].size();
+//                // TODO: if there were memory issues, removing this might help
+//                std::vector<std::pair<pos_t, uint8_t>> new_tags;
+//
+//                // Read more tags until we fill the batch or reach the end of the file
+//                while (new_tags.size() + remaining_tags < batch_size) {
+//                    if (file_positions[i] >= file_buffers[i].size()) {
+//                        // End of file reached, stop reading
+//                        file_end_reached[i] = true;
+//                        std::cerr << "End of file reached for: " << files[i] << std::endl;
+//                        break;
+//                    }
+//
+//                    auto tag_block = panindexer::TagArray::decode_run(
+//                            gbwt::ByteCode::read(file_buffers[i], file_positions[i])
+//                    );
+//                    new_tags.push_back(tag_block);
+//                }
+////
+////                std::cerr << "file pos in refill " << file_positions[i] << std::endl;
+////                std::cerr << "file size " << file_buffers[i].buffersize() << std::endl;
+//
+//
+//                // if new tags is not empty Add new tags to the existing batch
+//                if (!new_tags.empty()) {
+//                    tag_batches[i].insert(tag_batches[i].end(), new_tags.begin(), new_tags.end());
+//                }
+//            }
+//        }
     }
 
 
@@ -297,6 +374,7 @@ private:
     // Data Members
     std::vector <std::string> files;          // List of file paths
     std::vector <bool> file_end_reached;      // Flag to indicate end of file
+
     size_t n_threads;                        // Number of threads
     size_t current_thread_id;                // Current thread ID to execute
     std::vector <std::unique_ptr<std::mutex>> mutexes; // Mutex for each file
@@ -308,8 +386,9 @@ private:
     std::vector <gbwt::size_type> file_positions;      // Current file positions
     std::vector <sdsl::int_vector_buffer<8>> file_buffers; // File buffers for reading
     size_t batch_size;                      // Number of tags to read in a batch
-    std::vector <std::vector<std::pair < pos_t, uint8_t>>>
-    tag_batches; // buffer of tags of each tag_file
+    std::vector <size_t> current_index_tag_batch; // Current index of tag batch for each file
+    std::vector <std::vector<std::pair < pos_t, uint8_t>>> tag_batches; // buffer of tags of each tag_file
+    std::vector <size_t> current_length_tag_batch; // Remaining length of tag batch for each file
 
 };
 
@@ -319,15 +398,27 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
                         unordered_map <size_t, size_t> seq_id_to_comp_id, std::vector<std::pair<pos_t, uint8_t>> &buffer,
                         size_t starting_run, size_t runs_per_thread) {
 
-    std::cerr << "Extracting tags starting run " << starting_run << std::endl;
+#if TIME
+    auto time1 = chrono::high_resolution_clock::now();
+//    std::chrono::duration<double> duration1 = time2 - time1;
+//    std::cerr << "Indexing unique kmers took " << duration1.count() << " seconds" << std::endl;
+#endif
+
+//    std::cerr << "Extracting tags starting run " << starting_run << std::endl;
 
 
     std::vector<size_t> request(reader.get_file_num(), 0);
     std::vector<int> index_to_file;
     // get the sample at the start of the starting_run
-    auto index = r_index.getSample(starting_run);
-    int end_index;
-    int last_run_index = -1;
+    if (starting_run >= r_index.tot_runs()){
+        std::cerr << "Starting run is greater than total runs" << std::endl;
+        return;
+    }
+    size_t index = r_index.getSample(starting_run);
+
+//    std::cerr << "Index: " << index << std::endl;
+    size_t end_index;
+    size_t last_run_index = -1;
 
 
 
@@ -342,7 +433,13 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
         end_index = r_index.getSample(starting_run + runs_per_thread);
     }
 
+
+    int kk = 0;
+//    std::cerr << "the end index is " << end_index << std::endl;
+//    std::cerr << "Starting creating the request list " << std::endl;
     while (index != end_index && index != last_run_index){
+//        kk++;
+//        std::cerr << "kk " << kk << std::endl;
 
         auto seq_id = r_index.seqId(index);
         // want to get the file number that is associated with the seq id
@@ -351,7 +448,7 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
         request[current_file] += 1;
 
         index = r_index.locateNext(index);
-        std::cerr << index << std::endl;
+//        std::cerr << index << std::endl;
     }
 
 
@@ -369,9 +466,9 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
             int last_run_size = r_index.blocks.back().last_run_size();
 
             // have to just traverse the last run
-            std::cerr << "LAST RUN" << std::endl;
+//            std::cerr << "LAST RUN" << std::endl;
             for (int i = 0; i < last_run_size; i++){
-                std::cerr << "index " << index;
+//                std::cerr << "index " << index;
                 auto seq_id = r_index.seqId(index);
                 // want to get the file number that is associated with the seq id
                 auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
@@ -386,13 +483,27 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
 
     }
 
-    // print the items in request
-    for (size_t i = 0; i < request.size(); i++){
-        std::cerr << "Request " << request[i] << std::endl;
-    }
+//#if TIME
+//    auto time2 = chrono::high_resolution_clock::now();
+//    std::chrono::duration<double> duration1 = time2 - time1;
+//    std::cerr << "The total times getting sequence ids take in extract tag " << duration1.count() << " seconds" << "for thread " << thread_id << std::endl;
+//#endif
 
+    // print the items in request
+//    for (size_t i = 0; i < request.size(); i++){
+//        std::cerr << "Request " << request[i] << std::endl;
+//    }
+
+//    std::cerr << "Starting extracting the tags" << std::endl;
     // we have the tags we want to extract from each file. now we extract the tags for each index
     std::vector<std::vector<std::pair<pos_t, uint8_t>>> run_tags = reader.extract_requested_tags(thread_id, request);
+//
+//#if TIME
+//    auto time3 = chrono::high_resolution_clock::now();
+//    std::chrono::duration<double> duration2 = time3 - time2;
+//    std::cerr << "The total times reader.extract_tags take " << duration2.count() << " seconds" << "for thread " << thread_id  << std::endl;
+//#endif
+//    std::cerr << "Extracted the tags" << std::endl;
     pos_t current_tag;
     size_t current_index = 0;
     std::vector<std::pair<pos_t, uint8_t>> temp_buffer;
@@ -418,6 +529,12 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
             }
         }
     }
+
+//#if TIME
+//    auto time4 = chrono::high_resolution_clock::now();
+//    std::chrono::duration<double> duration3 = time4 - time3;
+//    std::cerr << "The total times converting back tags take " << duration3.count() << " seconds" << "for thread " << thread_id  << std::endl;
+//#endif
     buffer = temp_buffer;
 
     // print the temp_buffer
@@ -497,7 +614,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    int threads = 1;
+    int threads = 8;
     omp_set_num_threads(threads);
 
     std::string gbz_graph = std::string(argv[1]);
@@ -548,28 +665,32 @@ int main(int argc, char **argv) {
     std::vector<int> file_to_comp(number_of_file);
     std::vector<int> comp_to_file(number_of_file);
 
-    std::vector <pos_t> current_node_of_files(number_of_file);
-    std::vector <uint8_t> current_remaining_length_of_files(number_of_file);
-    std::vector <size_t> current_file_positions(number_of_file, 0);
+//    std::vector <pos_t> current_node_of_files(number_of_file);
+//    std::vector <uint8_t> current_remaining_length_of_files(number_of_file);
+//    std::vector <size_t> current_file_positions(number_of_file, 0);
 
-
+    std::cerr << "Initializing the reader" << std::endl;
+    FileReader reader(files, threads, 1000000);
     std::cerr << "Creating the mapping from comp to tag files" << std::endl;
     // for each tag block files, we read the first block and read the first node
     for (auto i = 0; i < number_of_file; i++) {
-        std::ifstream in(files[i]);
-        std::pair <pos_t, uint8_t> first_block = panindexer::TagArray::load_block_at(in, current_file_positions[i]);
-        current_node_of_files[i] = first_block.first;
-        current_remaining_length_of_files[i] = first_block.second;
+//        std::ifstream in(files[i]);
+//        std::pair <pos_t, uint8_t> first_block = panindexer::TagArray::load_block_at(in, current_file_positions[i]);
+//        std::cerr << "The first block of file " << files[i] << " is " << first_block.first << " " << int(first_block.second) << std::endl;
+//        current_node_of_files[i] = first_block.first;
+//        current_remaining_length_of_files[i] = first_block.second;
 
 //        std::cerr << "The first block of file " << files[i] << " is " << first_block.first << " " << int(first_block.second) << std::endl;
 
         // get the component of the node of the first block
-        size_t comp = node_to_comp_map[id(current_node_of_files[i])];
+        size_t comp = node_to_comp_map[id(reader.get_first_tag(i))];
 
 //        std::cerr << "The component of the first block of file is " << comp << std::endl;
         file_to_comp[i] = comp;
         comp_to_file[comp] = i;
+
     }
+
 
     std::cerr << "The mapping from comp to tag files is done" << std::endl;
 
@@ -612,72 +733,6 @@ int main(int argc, char **argv) {
     size_t current_run = 0;
 
 
-    // Single threaded version of extracting the tags for each position of the r-index
-//    for (size_t i = r_index.tot_strings() ; i < r_index.get_sequence_size(); i++){
-//        // seq_id is the same as GBWT path identifier
-//        auto seq_id = r_index.seqId(current);
-//
-//        // want to get the file number that is associated with the seq id
-//        auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
-//
-//        // reading the next tag from the current file
-//        if (current_remaining_length_of_files[current_file] == 0){
-//            std::cerr << "Error: reaching the end of file too soon " << std::endl;
-//        } else {
-//            // Just getting the node and decrementing the remaining length
-//            current_tag = current_node_of_files[current_file];
-//            current_remaining_length_of_files[current_file]--;
-//
-//            if (current_remaining_length_of_files[current_file] == 0){
-//                // read the next block
-//                std::ifstream in(files[current_file]);
-//                std::pair<pos_t, uint8_t> next_block = panindexer::TagArray::load_block_at(in, current_file_positions[current_file]);
-//
-//                current_node_of_files[current_file] = next_block.first;
-//                current_remaining_length_of_files[current_file] = next_block.second;
-//
-//                if (next_block.second == 0){
-//
-//                    std::cerr << "Error: the next block is empty " << seq_id << std::endl;
-//                    current_remaining_length_of_files[current_file] = 0;
-//                    current_node_of_files[current_file] = next_block.first;
-//                }
-//
-//            }
-//
-//
-//            if (current_run == 0){
-//                tag_runs.push_back(make_pair(current_tag, 1));
-//                current_run++;
-//            } else {
-//                if (current_tag == tag_runs[current_run - 1].first){
-//                    tag_runs[current_run - 1].second++;
-//                } else {
-//                    tag_runs.push_back(make_pair(current_tag, 1));
-//                    current_run++;
-//                }
-//            }
-//            tags[ i - r_index.tot_strings()] = current_tag;
-//        }
-//
-//        if (i != r_index.get_sequence_size() - 1){
-//            current = r_index.locateNext(current);
-//        }
-//    }
-
-
-
-
-
-
-    // print the tags
-//    cerr << "tags size " << tags.size() << " r index size " << r_index.get_sequence_size() << endl;
-
-    // print the tag_runs
-//    for (size_t i = 0; i < tag_runs.size(); i++){
-//        cerr << "tag " << tag_runs[i].first << " length " << int(tag_runs[i].second) << endl;
-//    }
-
     cerr << "Creating the whole genome tag array indexing" << endl;
     TagArray tag_array;
 
@@ -686,8 +741,7 @@ int main(int argc, char **argv) {
 #endif
 //    tag_array.serialize_run_by_run(tag_runs, "whole_genome_tag_array.tags");
 
-    std::cerr << "Initializing the reader" << std::endl;
-    FileReader reader(files, threads, 1000000);
+
     std::cerr << "Thread lists " << std::endl;
     std::vector <std::thread> threads_list;
     threads_list.reserve(threads);
@@ -695,7 +749,7 @@ int main(int argc, char **argv) {
     std::vector<int> current_position(threads, 0);
     int batch_size = 2000;
     vector <pos_t> tags_batch(batch_size);
-    vector <pair<pos_t, uint8_t>> tag_runs2;
+//    vector <pair<pos_t, uint8_t>> tag_runs2;
 //    vector<pos_t> tags2(total_tags_count);
     current_run = 0;
     vector <pair<pos_t, uint8_t>> tag_runs_check;
@@ -726,9 +780,10 @@ int main(int argc, char **argv) {
     }
 
     size_t starting_run = 0;
-    size_t run_per_thread = 1000;
+    size_t run_per_thread = 100;
 
 
+    std::cerr << "We will handle " << r_index.tot_runs() << " runs" << std::endl;
     cerr << "Merging tags and creating the whole genome tag array indexing" << endl;
     for (size_t to_read = 0; to_read < threads && to_read < r_index.tot_runs(); to_read++) {
         threads_list.emplace_back(extract_tags_batch, std::ref(r_index), std::ref(reader), to_read,
@@ -737,10 +792,11 @@ int main(int argc, char **argv) {
         starting_run += run_per_thread;
     }
 
-    std::cerr << "We will handle " << r_index.tot_runs() << " runs" << std::endl;
+
 
 
     size_t number_of_jobs = (r_index.tot_runs() + run_per_thread - 1) / run_per_thread;
+    std::pair<pos_t, uint8_t> previous_last_run;
 
     for (size_t to_write = 0; to_write < number_of_jobs; to_write++) {
         if (to_write % 10000 == 0) {
@@ -749,6 +805,23 @@ int main(int argc, char **argv) {
         size_t thread_id = to_write % threads;
         threads_list[thread_id].join();
         std::vector<std::pair<pos_t, uint8_t>> current_tags = thread_buffers[thread_id];
+
+        if (to_write == 0) {
+            // write everything but the last pair
+            previous_last_run = current_tags.back();
+            current_tags.pop_back();
+        } else {
+            if (current_tags[0].first == previous_last_run.first) {
+                current_tags[0].second += previous_last_run.second;
+            } else {
+                std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
+                tag_array.serialize_run_by_run(out, temp);
+            }
+            if (to_write < number_of_jobs - 1) {
+                previous_last_run = current_tags.back();
+                current_tags.pop_back();
+            }
+        }
         tag_array.serialize_run_by_run(out, current_tags);
 
 
@@ -839,6 +912,17 @@ int main(int argc, char **argv) {
 
 
 
+
+//    TagArray tt;
+//    tt.deserialize_run_by_run("whole_genome_tag_array_parallel_sdsl.tags");
+//    auto tag_runs2 = tt.get_tag_runs();
+//    // compare tag runs from test and tt
+//
+//    for (auto i = 0; i < tag_runs2.size() - 1; i++){
+//        if (tag_runs2[i].first == tag_runs2[i+1].first){
+//            std::cerr << "Wrong in index " << i << " " << tag_runs2[i].first << " " << tag_runs2[i+1].first << std::endl;
+//        }
+//    }
 
 
     return 0;

@@ -107,9 +107,13 @@ namespace panindexer {
 
         pos_t value;
         uint8_t run_length;
+        int i = 0;
 
         while (in.read(reinterpret_cast<char*>(&value), sizeof(pos_t))) {
             in.read(reinterpret_cast<char*>(&run_length), sizeof(uint8_t));
+            // print the value and run_length
+            std::cerr << i << " " << value << " " << int(run_length) << std::endl;
+            i++;
             this->tag_runs.emplace_back(value, run_length);
         }
 
