@@ -107,13 +107,13 @@ namespace panindexer {
 
         pos_t value;
         uint8_t run_length;
-        int i = 0;
+//        int i = 0;
 
         while (in.read(reinterpret_cast<char*>(&value), sizeof(pos_t))) {
             in.read(reinterpret_cast<char*>(&run_length), sizeof(uint8_t));
             // print the value and run_length
-            std::cerr << i << " " << value << " " << int(run_length) << std::endl;
-            i++;
+//            std::cerr << i << " " << value << " " << int(run_length) << std::endl;
+//            i++;
             this->tag_runs.emplace_back(value, run_length);
         }
 
@@ -254,7 +254,7 @@ namespace panindexer {
         for (gbwt::size_type value : encoded_runs) {
             out.push_back(value);
 //            std::cerr << "value: " << value << std::endl;
-//            gbwt::ByteCode::write(out, value);4
+//            gbwt::ByteCode::write(out, value);
 
 
         }
@@ -264,17 +264,6 @@ namespace panindexer {
         cerr << "Finished storing blocks" << endl;
     }
 
-//    void TagArray::store_blocks_sdsl_run_by_run(std::string filename, const std::vector<std::pair<pos_t, uint8_t>>& tag_runs) {
-//
-//
-//        // TODO: Implement this function
-//        sdsl::int_vector_buffer<8> out(filename, std::ios::out);
-//        for (gbwt::size_type value : encoded_runs) {
-//            gbwt::ByteCode::write(out, value);
-//        }
-//        out.close();
-//
-//    }
 
 
     std::pair<pos_t, uint8_t> TagArray::decode_run(gbwt::size_type decc) {

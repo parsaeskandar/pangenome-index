@@ -254,6 +254,7 @@ int main(int argc, char **argv) {
 
     cerr << "calculating the fraction of the tag arrays covered " << endl;
     // calculating the fraction of the tag arrays covered
+    int count = 0;
     for (auto it = bptree.begin(); it != bptree.end(); ++it) {
         panindexer::Run current_item = *it;
         if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
@@ -262,11 +263,15 @@ int main(int argc, char **argv) {
             if (next_it != bptree.end()) { // Check if the next element is not the end
                 panindexer::Run next_item = *next_it; // Get the next item
                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
+                count++;
                 // print the decoded items of current_item and next item
-                pos_t t1 = current_item.graph_position.decode();
-//                cerr << "The current item is: " << current_item << endl;
-//                cerr << "node id: " << vg::id(t1) << " offset " << vg::offset(t1) << " rev? " << vg::is_rev(t1) << endl;
-
+                if (count < 5) {
+                    pos_t t1 = current_item.graph_position.decode();
+                    cerr << "The current item is: " << current_item << endl;
+                    cerr << "the graph position is " << t1 << endl;
+                    cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+                    cerr << "The current start position is " << current_item.start_position << endl;
+                }
 //                if (next_item.start_position - current_item.start_position > 500){
 //                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
 //                }
@@ -280,7 +285,6 @@ int main(int argc, char **argv) {
 
     panindexer::TagArray tag_array;
     tag_array.load_bptree(bptree, idx.bwt_size());
-
 
 //    auto node_to_comp = node_to_component(gbz);
 

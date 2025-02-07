@@ -131,7 +131,7 @@ namespace panindexer {
                     std::cerr << this->runs[i].first << " " << this->runs[i].second << std::endl;
                 }
                 auto x = this->runs.back();
-                std::cerr << "here" << std::endl;
+                std::cerr << "here last run size is " << x.second << std::endl;
                 return this->runs.back().second;
             }
 
