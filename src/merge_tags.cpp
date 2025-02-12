@@ -23,7 +23,6 @@
 #include <stdexcept>
 
 
-// if not define Time define it
 #ifndef TIME
 #define TIME 1
 #endif
@@ -216,10 +215,10 @@ private:
 
     // This function checks for all the tag files it has that if the current number of batch files are less than batch_size/3 it will refill the tags
     void refill_tags() {
-        for (size_t i = 0; i < files.size(); i++){
+        for (size_t i = 0; i < files.size(); i++) {
             if (current_length_tag_batch[i] < batch_size / 3 && !file_end_reached[i]) {
                 size_t remaining_tags = current_length_tag_batch[i];
-                std::vector<std::pair<pos_t, uint8_t>> new_tags;
+                std::vector <std::pair<pos_t, uint8_t>> new_tags;
                 size_t new_tags_size = 0;
                 while (new_tags_size + remaining_tags < batch_size) {
                     if (file_positions[i] >= file_buffers[i].size()) {
@@ -237,7 +236,8 @@ private:
                     current_length_tag_batch[i]++;
                     new_tags_size++;
                 }
-
+            }
+        }
     }
 
 
@@ -523,11 +523,31 @@ int main(int argc, char **argv) {
     std::vector<std::vector<std::pair<pos_t, uint8_t>>> thread_buffers(threads);
 
 
-    const std::string filename = "whole_genome_tag_array_parallel_sdsl.tags";
+    const std::string filename = "whole_genome_tag_array_compressed.tags";
+    const std::string encoded_starts_file = "encoded_starts.bin";
+    const std::string bwt_intervals_file = "bwt_intervals.bin";
 
     // Check if the file exists and delete it
     if (std::filesystem::exists(filename)) {
         if (std::remove(filename.c_str()) != 0) {
+            std::cerr << "Error: Unable to delete the existing file.\n";
+            return 1; // Exit with error
+        } else {
+            std::cerr << "Existing file deleted successfully.\n";
+        }
+    }
+
+    if (std::filesystem::exists(encoded_starts_file)) {
+        if (std::remove(encoded_starts_file.c_str()) != 0) {
+            std::cerr << "Error: Unable to delete the existing file.\n";
+            return 1; // Exit with error
+        } else {
+            std::cerr << "Existing file deleted successfully.\n";
+        }
+    }
+
+    if (std::filesystem::exists(bwt_intervals_file)) {
+        if (std::remove(bwt_intervals_file.c_str()) != 0) {
             std::cerr << "Error: Unable to delete the existing file.\n";
             return 1; // Exit with error
         } else {
@@ -544,13 +564,51 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    std::ofstream out_encoded_starts(encoded_starts_file, std::ios::binary | std::ios::app);
+    if (!out_encoded_starts.is_open()) {
+        std::cerr << "Error: Cannot open file for writing.\n";
+        return 1;
+    }
+
+    // write a size_t dummy to fill with the size of the encoded_runs later
+    size_t placeholder = 0;
+    out.write(reinterpret_cast<const char*>(&placeholder), sizeof(size_t));
+
+
+    std::ofstream out_bwt_intervals(bwt_intervals_file, std::ios::binary | std::ios::app);
+    if (!out.is_open()) {
+        std::cerr << "Error: Cannot open file for writing.\n";
+        return 1;
+    }
+
+
+    // ############################################## variables to change
+    size_t run_per_thread = 10;
+    int encoded_start_every_k_run = 10;
+
+
+
+
+    // ############################################## variables
+    int remaining_run_to_write_start = 0;
+    size_t cumulative_starts = 0;
+    size_t encoded_start_ones = 0;
+    size_t start_pos = 0;
+
+//    TagArray tag_array;
+
+
+
     size_t tag_count = 0;
     size_t tag_run_count = 0;
+    std::pair<pos_t, uint8_t> previous_last_run;
+    std::vector<std::pair<pos_t, uint8_t>> temp_tag_runs;
 
     // have to calculate the number of ENDMARKERS at the beginning of the r-index and put special value 0 for them
     auto num_endmarkers = r_index.tot_strings();
-    std::vector<std::pair<pos_t, uint8_t>> endmarkers = {std::make_pair(pos_t{0, 0, 0}, num_endmarkers)};
-    tag_array.serialize_run_by_run(out, endmarkers);
+//    std::vector<std::pair<pos_t, uint8_t>> endmarkers = {std::make_pair(pos_t{0, 0, 0}, num_endmarkers)};
+    temp_tag_runs.push_back(std::make_pair(pos_t{0, 0, 0}, num_endmarkers));
+//    tag_array.serialize_run_by_run(out, endmarkers);
     tag_count += num_endmarkers;
     tag_run_count++;
 
@@ -561,7 +619,6 @@ int main(int argc, char **argv) {
     // having to find the run and index of the BWT position num_endmarkers
     // iter.first is the block number num_endmarkers is in
     // iter.second is the offset of the beginning of the block
-//    num_endmarkers = 9;
     auto iter = r_index.blocks_start_pos.predecessor(num_endmarkers);
 
     size_t cur_pos = 0;
@@ -583,7 +640,7 @@ int main(int argc, char **argv) {
     auto end = r_index.getSample(run_id + 1);
     // we have to handle the indexes that are between first and end
 
-    std::vector<std::pair<pos_t, uint8_t>> temp_tag_runs;
+
     while (first != end){
         first = r_index.locateNext(first);
         auto seq_id = r_index.seqId(first);
@@ -591,32 +648,73 @@ int main(int argc, char **argv) {
         auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
 
         auto temp_tag = reader.get_next_tag(current_file);
-        if (temp_tag_runs.size() == 0){
-            temp_tag_runs.push_back(std::make_pair(temp_tag, 1));
-        } else {
-            if (temp_tag_runs.back().first == temp_tag){
-                temp_tag_runs.back().second += 1;
-                if (first == end){
-                    tag_count += temp_tag_runs.back().second;
-                }
-            } else {
+
+        if (temp_tag_runs.back().first == temp_tag){
+            temp_tag_runs.back().second += 1;
+            if (first == end){
                 tag_count += temp_tag_runs.back().second;
-                temp_tag_runs.push_back(std::make_pair(temp_tag, 1));
             }
+        } else {
+            tag_count += temp_tag_runs.back().second;
+            temp_tag_runs.push_back(std::make_pair(temp_tag, 1));
         }
     }
 
     std::cerr << "Writing " << temp_tag_runs.size() << " tags before running actual jobs" << std::endl;
 
     tag_run_count += temp_tag_runs.size();
-    tag_array.serialize_run_by_run(out, temp_tag_runs);
+
+
+    previous_last_run = temp_tag_runs.back(); // have to check with next one and merge them if needed
+    temp_tag_runs.pop_back();
+    // TODO: handle the case in compressed version - also the last element might be needed for merging later
+
+
+    tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp_tag_runs);
+//    std::vector<gbwt::byte_type> temp_encoded_runs;
+//    if (temp_tag_runs.size() > 0) {
+//        for (const auto& [value, run_length] : temp_tag_runs) {
+//            if (remaining_run_to_write_start % encoded_start_every_k_run == 0){
+//                start_pos = cumulative_starts + temp_encoded_runs.size();
+//                // write the encoded start in file
+//                out_encoded_starts.write(reinterpret_cast<const char*>(&start_pos), sizeof(start_pos));
+//                encoded_start_ones++;
+//            }
+//
+//            gbwt::size_type encoded1 =
+//                    (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
+//                    (run_length << 11) |
+//                    (gbwtgraph::id(value) << 19);
+//
+//            gbwt::ByteCode::write(temp_encoded_runs, encoded1);
+//
+//
+//
+//            remaining_run_to_write_start++;
+//        }
+//
+//        size_t size = temp_encoded_runs.size();
+////            out.write(reinterpret_cast<const char *>(&size), sizeof(size));
+//        out.write(reinterpret_cast<const char *>(temp_encoded_runs.data()), size * sizeof(gbwt::byte_type));
+//        cumulative_starts += size;
+//
+//    }
+//    tag_array.serialize_run_by_run(out, temp_tag_runs);
 
 
     size_t starting_run = run_id + 1;
-    size_t run_per_thread = 1000;
+
+
+
+
+
+
+
+
     size_t number_of_jobs = (r_index.tot_runs() - starting_run + run_per_thread - 1) / run_per_thread;
 
 
+    std::cerr << "Total bwt indexes to find tags for is " << r_index.get_sequence_size() << std::endl;
     std::cerr << "We will handle " << r_index.tot_runs() << " runs" << std::endl;
     cerr << "Merging tags and creating the whole genome tag array indexing" << endl;
     for (size_t to_read = 0; to_read < threads && starting_run < r_index.tot_runs(); to_read++) {
@@ -630,7 +728,7 @@ int main(int argc, char **argv) {
 
 
 
-    std::pair<pos_t, uint8_t> previous_last_run;
+
 
     for (size_t to_write = 0; to_write < number_of_jobs; to_write++) {
         if (to_write % 10000 == 0) {
@@ -653,29 +751,46 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        if (to_write == 0) {
-            // write everything but the last pair
+
+        std::vector<gbwt::byte_type> encoded_runs;
+
+        if (current_tags[0].first == previous_last_run.first) {
+            current_tags[0].second += previous_last_run.second;
+        } else {
+            std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
+            tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp);
+
+//            std::cerr << "Handling the previous last run" << std::endl;
+
+//            if (remaining_run_to_write_start % encoded_start_every_k_run == 0){
+//                start_pos = cumulative_starts + encoded_runs.size();
+//                // write the encoded start in file
+//                out_encoded_starts.write(reinterpret_cast<const char*>(&start_pos), sizeof(start_pos));
+//                encoded_start_ones++;
+//            }
+//
+//            gbwt::size_type temp_encoded =
+//                    (gbwtgraph::offset(previous_last_run.first)) | (gbwtgraph::is_rev(previous_last_run.first) << 10) |
+//                    (previous_last_run.second << 11) |
+//                    (gbwtgraph::id(previous_last_run.first) << 19);
+//
+//            gbwt::ByteCode::write(encoded_runs, temp_encoded);
+//
+//            remaining_run_to_write_start++;
+
+//                std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
+//
+//                tag_array.serialize_run_by_run(out, temp);
+
+        }
+        if (to_write < number_of_jobs - 1) {
             previous_last_run = current_tags.back();
             current_tags.pop_back();
-        } else {
-            if (current_tags[0].first == previous_last_run.first) {
-                current_tags[0].second += previous_last_run.second;
-            } else {
-                std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
-                tag_array.serialize_run_by_run(out, temp);
-
-            }
-            if (to_write < number_of_jobs - 1) {
-                previous_last_run = current_tags.back();
-                current_tags.pop_back();
-            }
         }
+
 
         tag_run_count += current_tags.size();
-        if (current_tags.size() > 0) {
-
-            tag_array.serialize_run_by_run(out, current_tags);
-        }
+        tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, current_tags);
 
 
     }
@@ -685,11 +800,20 @@ int main(int argc, char **argv) {
         }
     }
 
-    out.close();
+
+    out_encoded_starts.close();
+    out_bwt_intervals.close();
 
     std::cerr << "Total tags count run " << tag_run_count << std::endl;
+    std::cerr << "Total length of encoded runs " << start_pos + 1 << std::endl;
+    std::cerr << "Saving the start of runs every " << encoded_start_every_k_run << " which lead to " << encoded_start_ones << " 1s in the start sd_vector" << std::endl;
+
+    tag_array.merge_compressed_files(out, encoded_starts_file, bwt_intervals_file);
+    std::cerr << "Index files merged and ready to use!" << std::endl;
 
 
+
+    out.close();
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
     std::chrono::duration<double> duration2 = time3 - time2;

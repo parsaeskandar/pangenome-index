@@ -48,6 +48,9 @@ namespace panindexer {
             return tag_runs;
         };
 
+        void compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs);
+        void merge_compressed_files(std::ostream &main_out, const std::string encoded_starts_file, const std::string bwt_intervals_file);
+
     private:
 
         //
@@ -57,12 +60,23 @@ namespace panindexer {
         sdsl::bit_vector encoded_runs_starts;
 
 
+        sdsl::sd_vector<> encoded_runs_starts_sd;
+
         sdsl::sd_vector<> bwt_intervals;
 
         sdsl::bit_vector::select_1_type encoded_runs_starts_select;
         sdsl::sd_vector<>::rank_1_type bwt_intervals_rank;
 
         vector<pair<pos_t, uint8_t>> tag_runs;
+
+
+        // Variables for the serialization
+        int encoded_start_every_k_run = 10;
+        int remaining_run_to_write_start = 0;
+        size_t cumulative_starts = 0;
+        size_t encoded_start_ones = 0;
+        size_t start_pos = 0;
+        size_t cumulative_run_bwt_position = 0;
 
 
     };

@@ -15,7 +15,7 @@ namespace panindexer {
 
 
     TagArray::TagArray() {
-        // Initialize the run_starts bit vector with the given size and set all bits to 0
+
 
     }
 
@@ -99,6 +99,7 @@ namespace panindexer {
         }
     }
 
+
     void TagArray::deserialize_run_by_run(const std::string& file_name) {
         std::ifstream in(file_name, std::ios::binary);
         if (!in.is_open()) {
@@ -118,6 +119,96 @@ namespace panindexer {
         }
 
         in.close();
+    }
+
+    void TagArray::merge_compressed_files(std::ostream &main_out, const std::string encoded_starts_file, const std::string bwt_intervals_file){
+
+
+        // merging the encoded_starts file with the main index file
+        std::ifstream in_encoded_starts(encoded_starts_file, std::ios::binary);
+        size_t start_pos_read;
+        sdsl::sd_vector_builder builder(this->start_pos + 1, this->encoded_start_ones);
+
+        while (in_encoded_starts.read(reinterpret_cast<char*>(&start_pos_read), sizeof(start_pos_read))){
+    //        std::cerr << "Read start pos " << start_pos_read << std::endl;
+            builder.set(start_pos_read);
+        }
+        in_encoded_starts.close();
+
+
+        this->encoded_runs_starts_sd = sdsl::sd_vector<>(builder);
+        // print some stats from the sd vector
+        std::cerr << "The size of the encoded_runs_starts vector is: " << this->encoded_runs_starts_sd.size() << std::endl;
+        std::cerr << "Number of 1s in the encoded_runs_starts vector is: " << this->encoded_start_ones << std::endl;
+
+
+        sdsl::serialize(this->encoded_runs_starts_sd, main_out);
+        // delete the encoded_starts file
+        std::remove(encoded_starts_file.c_str());
+
+
+        // merging the bwt_intervals file with the main index file
+        std::ifstream in_bwt_intervals(bwt_intervals_file, std::ios::binary);
+        size_t bwt_pos_read;
+        sdsl::sd_vector_builder builder_bwt(this->cumulative_run_bwt_position + 1, this->remaining_run_to_write_start);
+
+        while (in_bwt_intervals.read(reinterpret_cast<char*>(&bwt_pos_read), sizeof(bwt_pos_read))){
+            builder_bwt.set(bwt_pos_read);
+        }
+        in_bwt_intervals.close();
+
+        this->bwt_intervals = sdsl::sd_vector<>(builder_bwt);
+
+        std::cerr << "The size of the bwt_intervals vector is: " << this->bwt_intervals.size() << std::endl;
+        std::cerr << "Number of 1s in the bwt_intervals vector is: " << this->remaining_run_to_write_start << std::endl;
+
+        sdsl::serialize(this->bwt_intervals, main_out);
+        std::remove(bwt_intervals_file.c_str());
+
+
+        std::cerr << "The number of encoded runs vector size is " << this->cumulative_starts << std::endl;
+
+        // write the size of the encoded_runs vector at the beginning of the file
+        main_out.seekp(0, std::ios::beg);
+        main_out.write(reinterpret_cast<const char*>(&this->cumulative_starts), sizeof(size_t));
+    }
+
+    void TagArray::compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs){
+        std::vector<gbwt::byte_type> encoded_runs;
+        if (tag_runs.size() > 0) {
+            for (const auto& [value, run_length] : tag_runs) {
+                // keeping the data for creating the bwt_intervals
+                bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
+                this->cumulative_run_bwt_position += run_length;
+
+
+                // keeping the data for creating the encoded starts
+                if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
+                    this->start_pos = this->cumulative_starts + encoded_runs.size();
+                    // write the encoded start in file
+                    encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
+                    this->encoded_start_ones++;
+                }
+
+                gbwt::size_type encoded =
+                        (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
+                        (run_length << 11) |
+                        (gbwtgraph::id(value) << 19);
+
+                gbwt::ByteCode::write(encoded_runs, encoded);
+
+                this->remaining_run_to_write_start++;
+            }
+
+            size_t size = encoded_runs.size();
+//            out.write(reinterpret_cast<const char *>(&size), sizeof(size));
+            main_out.write(reinterpret_cast<const char *>(encoded_runs.data()), size * sizeof(gbwt::byte_type));
+            this->cumulative_starts += size;
+
+        } else {
+            std::cerr << "No tags to compress and write" << std::endl;
+        }
+
     }
 
 
