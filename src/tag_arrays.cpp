@@ -121,7 +121,7 @@ namespace panindexer {
         in.close();
     }
 
-    void TagArray::merge_compressed_files(std::ostream &main_out, const std::string encoded_starts_file, const std::string bwt_intervals_file){
+    void TagArray::merge_compressed_files(const std::string filename, const std::string encoded_starts_file, const std::string bwt_intervals_file){
 
 
         // merging the encoded_starts file with the main index file
@@ -141,7 +141,10 @@ namespace panindexer {
         std::cerr << "The size of the encoded_runs_starts vector is: " << this->encoded_runs_starts_sd.size() << std::endl;
         std::cerr << "Number of 1s in the encoded_runs_starts vector is: " << this->encoded_start_ones << std::endl;
 
-
+        std::ofstream main_out(filename, std::ios::binary | std::ios::app);
+        if (!main_out.is_open()) {
+            std::cerr << "Error: Cannot open file for writing.\n";
+        }
         sdsl::serialize(this->encoded_runs_starts_sd, main_out);
         // delete the encoded_starts file
         std::remove(encoded_starts_file.c_str());
@@ -168,12 +171,18 @@ namespace panindexer {
         sdsl::serialize(this->bwt_intervals, main_out);
         std::remove(bwt_intervals_file.c_str());
 
+        main_out.close();
+
 
         std::cerr << "The number of encoded runs vector size is " << this->cumulative_starts << std::endl;
 
+        std::fstream out(filename, std::ios::in | std::ios::out | std::ios::binary);
         // write the size of the encoded_runs vector at the beginning of the file
-        main_out.seekp(0, std::ios::beg);
-        main_out.write(reinterpret_cast<const char*>(&this->cumulative_starts), sizeof(size_t));
+        out.flush();
+        out.seekp(0, std::ios::beg);
+        out.write(reinterpret_cast<const char*>(&this->cumulative_starts), sizeof(size_t));
+
+        out.close();
     }
 
     void TagArray::compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs){

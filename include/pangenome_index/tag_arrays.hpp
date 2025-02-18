@@ -49,7 +49,7 @@ namespace panindexer {
         };
 
         void compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs);
-        void merge_compressed_files(std::ostream &main_out, const std::string encoded_starts_file, const std::string bwt_intervals_file);
+        void merge_compressed_files(const std::string filename, const std::string encoded_starts_file, const std::string bwt_intervals_file);
         void load_compressed_tags(std::istream &in);
 
     private:

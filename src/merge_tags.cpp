@@ -803,17 +803,18 @@ int main(int argc, char **argv) {
 
     out_encoded_starts.close();
     out_bwt_intervals.close();
+    out.close();
 
     std::cerr << "Total tags count run " << tag_run_count << std::endl;
     std::cerr << "Total length of encoded runs " << start_pos + 1 << std::endl;
     std::cerr << "Saving the start of runs every " << encoded_start_every_k_run << " which lead to " << encoded_start_ones << " 1s in the start sd_vector" << std::endl;
 
-    tag_array.merge_compressed_files(out, encoded_starts_file, bwt_intervals_file);
+    tag_array.merge_compressed_files(filename, encoded_starts_file, bwt_intervals_file);
     std::cerr << "Index files merged and ready to use!" << std::endl;
 
 
 
-    out.close();
+//    out.close();
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
     std::chrono::duration<double> duration2 = time3 - time2;
