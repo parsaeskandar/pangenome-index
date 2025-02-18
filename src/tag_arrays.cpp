@@ -150,6 +150,9 @@ namespace panindexer {
         // merging the bwt_intervals file with the main index file
         std::ifstream in_bwt_intervals(bwt_intervals_file, std::ios::binary);
         size_t bwt_pos_read;
+
+        std::cerr << "Building the bwt_intervals vector with size " << this->cumulative_run_bwt_position + 1 << " and the number of 1s is " << this->remaining_run_to_write_start << std::endl;
+
         sdsl::sd_vector_builder builder_bwt(this->cumulative_run_bwt_position + 1, this->remaining_run_to_write_start);
 
         while (in_bwt_intervals.read(reinterpret_cast<char*>(&bwt_pos_read), sizeof(bwt_pos_read))){
@@ -209,6 +212,28 @@ namespace panindexer {
             std::cerr << "No tags to compress and write" << std::endl;
         }
 
+    }
+
+
+    void TagArray::load_compressed_tags(std::istream &in) {
+        // Read the size of the encoded_runs vector
+        size_t encoded_runs_size;
+        in.read(reinterpret_cast<char*>(&encoded_runs_size), sizeof(size_t));
+
+        std::cerr << "Loading encoded runs of size: " << encoded_runs_size << std::endl;
+
+        // Read the encoded runs vector
+        this->encoded_runs.resize(encoded_runs_size);
+        in.read(reinterpret_cast<char*>(this->encoded_runs.data()), encoded_runs_size * sizeof(gbwt::byte_type));
+
+        // Read the encoded_runs_starts_sd vector
+        this->encoded_runs_starts_sd.load(in);
+
+        // Read the bwt_intervals vector
+        this->bwt_intervals.load(in);
+
+        std::cerr << "Loaded encoded runs_starts_sd of size: " << this->encoded_runs_starts_sd.size() << std::endl;
+        std::cerr << "Loaded bwt_intervals of size: " << this->bwt_intervals.size() << std::endl;
     }
 
 

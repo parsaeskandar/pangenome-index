@@ -591,10 +591,11 @@ namespace panindexer {
 
         }
 
-        // printing the endmarker runs
-        for (size_t i = 0; i < endmarker_runs.size(); i++) {
-            std::cerr << endmarker_runs[i] << " ";
-        }
+        std::cerr << "endmarker runs size " << endmarker_runs.size() << std::endl;
+//        // printing the endmarker runs
+//        for (size_t i = 0; i < endmarker_runs.size(); i++) {
+//            std::cerr << endmarker_runs[i] << " ";
+//        }
 
 
         // Extract the samples from each sequence.
@@ -608,7 +609,7 @@ namespace panindexer {
 #pragma omp parallel for schedule(dynamic, 1)
         for (size_type i = 0; i < n_seq; i++) {
 
-            std::cerr << "Starting a sub job for seq" << i << std::endl;
+//            std::cerr << "Starting a sub job for seq" << i << std::endl;
 
 
             std::vector <sample_record> head_buffer, tail_buffer;
@@ -656,7 +657,7 @@ namespace panindexer {
                 curr = next;
                 seq_offset++;
 
-                if (seq_offset % 10000000 == 0) {
+                if (seq_offset % 100000000 == 0) {
                     std::cerr << "seq " << i << " offset " << seq_offset << std::endl;
                 }
             }
@@ -666,7 +667,7 @@ namespace panindexer {
             for (sample_record &record: tail_buffer) { record.seq_offset = seq_offset - 1 - record.seq_offset; }
 
             //
-            std::cerr << "completed a sub job for seq" << i  << " with len " << seq_offset << std::endl;
+//            std::cerr << "completed a sub job for seq" << i  << " with len " << seq_offset << std::endl;
 
 #pragma omp critical
             {

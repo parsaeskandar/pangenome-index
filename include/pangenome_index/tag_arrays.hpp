@@ -50,6 +50,7 @@ namespace panindexer {
 
         void compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs);
         void merge_compressed_files(std::ostream &main_out, const std::string encoded_starts_file, const std::string bwt_intervals_file);
+        void load_compressed_tags(std::istream &in);
 
     private:
 
@@ -71,8 +72,8 @@ namespace panindexer {
 
 
         // Variables for the serialization
-        int encoded_start_every_k_run = 10;
-        int remaining_run_to_write_start = 0;
+        size_t encoded_start_every_k_run = 10;
+        size_t remaining_run_to_write_start = 0;
         size_t cumulative_starts = 0;
         size_t encoded_start_ones = 0;
         size_t start_pos = 0;

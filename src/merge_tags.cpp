@@ -583,7 +583,7 @@ int main(int argc, char **argv) {
 
 
     // ############################################## variables to change
-    size_t run_per_thread = 10;
+    size_t run_per_thread = 1000;
     int encoded_start_every_k_run = 10;
 
 
