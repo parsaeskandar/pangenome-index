@@ -472,6 +472,14 @@ namespace panindexer {
 
         }
 
+        gbwt::range_type count(std::string &pattern){
+            gbwt::range_type range = {0, this->bwt_size() - 1};
+            for (size_t i = pattern.length(); i > 0; i--) {
+                range = this->LF(range, pattern[i - 1]);
+            }
+            return range;
+        }
+
 
         // first is the symbol and the second is the next position index (backtrack)
         std::pair <size_t, size_t> psi(size_t idx);

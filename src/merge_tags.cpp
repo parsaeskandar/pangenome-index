@@ -87,6 +87,10 @@ public:
 
 
     pos_t get_first_tag(int fileIndex) {
+//        std::cerr << "Starting tag runs of file " << files[fileIndex] << std::endl;
+//        for (size_t i = 0; i < 3; i++) {
+//            std::cerr << tag_batches[fileIndex][i].first << " " << int(tag_batches[fileIndex][i].second) << std::endl;
+//        }
         return tag_batches[fileIndex][0].first;
     }
 
@@ -629,8 +633,11 @@ int main(int argc, char **argv) {
     // we want a job handling the remaining of the run_id run
     auto first = r_index.getSample(run_id);
 
+    std::cerr << "start of the run first " << first << std::endl;
+
     // Iterate until the start of the range and locate the first occurrence.
     while (offset_of_first < num_endmarkers) {
+        std::cerr << "Not in here" << std::endl;
         first = r_index.locateNext(first);
         offset_of_first++;
     }
@@ -642,8 +649,9 @@ int main(int argc, char **argv) {
 
 
     while (first != end){
-        first = r_index.locateNext(first);
+
         auto seq_id = r_index.seqId(first);
+        std::cerr << "Seq id " << seq_id << std::endl;
         // want to get the file number that is associated with the seq id
         auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
 
@@ -658,6 +666,7 @@ int main(int argc, char **argv) {
             tag_count += temp_tag_runs.back().second;
             temp_tag_runs.push_back(std::make_pair(temp_tag, 1));
         }
+        first = r_index.locateNext(first);
     }
 
     std::cerr << "Writing " << temp_tag_runs.size() << " tags before running actual jobs" << std::endl;

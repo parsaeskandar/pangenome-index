@@ -33,39 +33,80 @@ namespace panindexer {
 
 
 
+//    template<typename T>
+//    class ThreadSafeQueue {
+//    public:
+//        // Push item to the queue
+//        void push(const T &item);
+//
+//        // Try to pop item from the queue, return true if successful
+//        bool try_pop(T &item);
+//
+//    private:
+//        std::queue <T> queue_;
+//        std::mutex mutex_;
+//        std::condition_variable cond_var_;
+//    };
+//
+//    template<typename T>
+//    void ThreadSafeQueue<T>::push(const T &item) {
+//        std::unique_lock <std::mutex> lock(mutex_);
+//        queue_.push(item);
+//        lock.unlock();
+//        cond_var_.notify_one();
+//    }
+//
+//    template<typename T>
+//    bool ThreadSafeQueue<T>::try_pop(T &item) {
+//        std::unique_lock <std::mutex> lock(mutex_);
+//        if (queue_.empty()) {
+//            return false;
+//        }
+//        item = queue_.front();
+//        queue_.pop();
+//        return true;
+//    }
+
     template<typename T>
     class ThreadSafeQueue {
     public:
         // Push item to the queue
-        void push(const T &item);
+        void push(const T &item) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            queue_.push(item);
+            cond_var_.notify_one();  // Notify while holding the lock
+        }
 
-        // Try to pop item from the queue, return true if successful
-        bool try_pop(T &item);
+        // Try to pop an item (non-blocking)
+        bool try_pop(T &item) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (queue_.empty()) {
+                return false;
+            }
+            item = std::move(queue_.front());
+            queue_.pop();
+            return true;
+        }
+
+        // Blocking pop (waits until an item is available)
+        void wait_and_pop(T &item) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            cond_var_.wait(lock, [this]() { return !queue_.empty(); }); // Wait until not empty
+            item = std::move(queue_.front());
+            queue_.pop();
+        }
+
+        // Check if the queue is empty (thread-safe)
+        bool empty() {
+            std::unique_lock<std::mutex> lock(mutex_);
+            return queue_.empty();
+        }
 
     private:
-        std::queue <T> queue_;
+        std::queue<T> queue_;
         std::mutex mutex_;
         std::condition_variable cond_var_;
     };
-
-    template<typename T>
-    void ThreadSafeQueue<T>::push(const T &item) {
-        std::unique_lock <std::mutex> lock(mutex_);
-        queue_.push(item);
-        lock.unlock();
-        cond_var_.notify_one();
-    }
-
-    template<typename T>
-    bool ThreadSafeQueue<T>::try_pop(T &item) {
-        std::unique_lock <std::mutex> lock(mutex_);
-        if (queue_.empty()) {
-            return false;
-        }
-        item = queue_.front();
-        queue_.pop();
-        return true;
-    }
 
 // This function input is the OCC vector of the end of the sequences and it returns the sorted end_of_seq vector
 // which is the sorted vector of pairs (i, SA[i]) for the end of each sequence which is (ISA[j], j)
@@ -131,7 +172,8 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
         size_t start = i * part_size;
         size_t end = (i + 1) * part_size - 1;
         if (i == threads - 1) {
-            end = idx.bwt_size() - 1;
+            end = idx.bwt_size() - 1; // TODO: CHECK
+//            end = idx.bwt_size() - 1;
         }
         kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
 //        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
@@ -283,105 +325,200 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
 void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &idx,
                                  vector <pair<uint64_t, uint64_t>> &end_of_seq) {
     auto number_of_sequences = end_of_seq.size();
-    int traverse = 0;
 
-    vector<int> tmp;
-
-    vector <Run> tmp1;
+    std::vector<Run> tmp1;
     omp_lock_t lock;
     omp_init_lock(&lock);
 
     cerr << "Filling the gaps on the bptree" << endl;
 
-#pragma omp parallel for
-    for (int seq_num = 0; seq_num < number_of_sequences; ++seq_num) {
+    // Using `num_threads` for efficient merging
+    int num_threads = omp_get_max_threads();
+    std::vector<std::vector<Run>> thread_tmp(num_threads); // Each thread gets its own vector
 
-        auto seq_graph_nodes = gbz.index.extract(seq_num * 2);
-        auto bwt_index = end_of_seq[seq_num].first;
+#pragma omp parallel
+    {
+        int thread_id = omp_get_thread_num();
+        std::vector<Run>& local_tmp1 = thread_tmp[thread_id]; // Thread-local storage
 
-        auto current_nodes_index = seq_graph_nodes.size() - 1;
-        auto current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
-        auto in_node_index = gbz.graph.get_length(current_node) - 1;
+#pragma omp for
+        for (int seq_num = 0; seq_num < number_of_sequences; ++seq_num) {
 
-        vector <Run> local_tmp1;
+            auto seq_graph_nodes = gbz.index.extract(seq_num * 2);
+            auto bwt_index = end_of_seq[seq_num].first;
 
+            auto current_nodes_index = seq_graph_nodes.size() - 1;
+            auto current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+            auto in_node_index = gbz.graph.get_length(current_node) - 1;
 
-        // traversing the RLBWT of a sequence
-        while (true) {
-#pragma omp atomic
-            traverse++;
+            while (true) {
+                auto temp = idx.psi(bwt_index);
+                bwt_index = temp.second;
+                auto first = temp.first;
 
-
-            // moving backwards
-            auto temp = idx.psi(bwt_index);
-            bwt_index = temp.second;
-            auto first = temp.first;
-
-            if (first == NENDMARKER) {
-                cerr << "The end of the sequence at bwt index " << bwt_index << endl;
-                break;
-            }
-
-            // make sure there is still room to traverse on the current node
-            if (in_node_index == -1) {
-                if (current_nodes_index == 0) {
+                if (first == NENDMARKER) {
+                    cerr << "The end of the sequence at BWT index " << bwt_index << endl;
                     break;
                 }
-                current_nodes_index--;
-                current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
-                in_node_index = gbz.graph.get_length(current_node) - 1;
-            }
 
-            // traverse the nodes on the graph to get the same base
-//            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
+                if (in_node_index == -1) {
+                    if (current_nodes_index == 0) {
+                        break;
+                    }
+                    current_nodes_index--;
+                    current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+                    in_node_index = gbz.graph.get_length(current_node) - 1;
+                }
 
-//            assert(first == gbz.graph.get_base(current_node, in_node_index));
+                in_node_index--;
 
-            in_node_index--;
+                auto bptree_search = bptree.search(bwt_index);
 
-            // have to check if the current bwt position is in the bptree or not
-            // calling search function if it return a gap run then this position is not currently in the tree and have to add it
-            // if it returns a non-gap run then this position is already in the tree and we can continue traversing the bwt
-            auto bptree_search = bptree.search(bwt_index);
+                if (bptree_search.graph_position.value == 0) {
+                    pos_t current_pos = pos_t{
+                            gbz.graph.get_id(current_node),
+                            gbz.graph.get_is_reverse(current_node),
+                            in_node_index + 1
+                    };
 
-            // the current position is not in the tree
-            if (bptree_search.graph_position.value == 0) {
-                // adding the current position to the tree
-                pos_t current_pos = pos_t{gbz.graph.get_id(current_node), gbz.graph.get_is_reverse(current_node),
-                                          in_node_index + 1};
+                    Run current_run = {bwt_index, gbwtgraph::Position::encode(current_pos)};
+                    local_tmp1.push_back(current_run);
 
-                Run current_run = {bwt_index, gbwtgraph::Position::encode(current_pos)};
-                local_tmp1.push_back(current_run);
-
-
-            } else {
-                // not adding the current position to the tree however checking if the tree position and the current graph
-                // positions are the same
-                pos_t current_pos = pos_t{gbz.graph.get_id(current_node), gbz.graph.get_is_reverse(current_node),
-                                          in_node_index + 1};
-
-//                assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
+                } else {
+                    pos_t current_pos = pos_t{
+                            gbz.graph.get_id(current_node),
+                            gbz.graph.get_is_reverse(current_node),
+                            in_node_index + 1
+                    };
+//                    assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
+                }
             }
         }
-
-        // Lock to update shared data
-        omp_set_lock(&lock);
-        tmp1.insert(tmp1.end(), local_tmp1.begin(), local_tmp1.end());
-        omp_unset_lock(&lock);
     }
 
     cerr << "The traverse completed" << endl;
 
-    // Sort before inserting into the bptree
-    sort(tmp1.begin(), tmp1.end());
+    // Merge all thread-local results into `tmp1` (single-threaded step)
+    for (auto& local_tmp : thread_tmp) {
+//        for (auto &i : local_tmp) {
+//            bptree.insert(i, 1);
+//        }
+        tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
+    }
 
-    // insert all the items in the tmp1 to the bptree
-    for (auto &i: tmp1) {
+
+
+    // **Sorting before insertion (if needed)**
+    std::sort(tmp1.begin(), tmp1.end());
+
+    std::cerr << "Adding " << tmp1.size() << " runs with size 1 to the BPlusTree" << std::endl;
+
+    for (auto &i : tmp1) {
         bptree.insert(i, 1);
     }
 
     omp_destroy_lock(&lock);
 }
+
+
+
+//void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &idx,
+//                                 vector <pair<uint64_t, uint64_t>> &end_of_seq) {
+//    auto number_of_sequences = end_of_seq.size();
+//
+//
+//    vector <Run> tmp1;
+//    omp_lock_t lock;
+//    omp_init_lock(&lock);
+//
+//    cerr << "Filling the gaps on the bptree" << endl;
+//
+//
+//#pragma omp parallel for
+//    for (int seq_num = 0; seq_num < number_of_sequences; ++seq_num) {
+//
+//        auto seq_graph_nodes = gbz.index.extract(seq_num * 2);
+//        auto bwt_index = end_of_seq[seq_num].first;
+//
+//        auto current_nodes_index = seq_graph_nodes.size() - 1;
+//        auto current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+//        auto in_node_index = gbz.graph.get_length(current_node) - 1;
+//
+//        vector <Run> local_tmp1;
+//
+//
+//        // traversing the RLBWT of a sequence
+//        while (true) {
+////#pragma omp atomic
+//            // moving backwards
+//            auto temp = idx.psi(bwt_index);
+//            bwt_index = temp.second;
+//            auto first = temp.first;
+//
+//            if (first == NENDMARKER) {
+//                cerr << "The end of the sequence at bwt index " << bwt_index << endl;
+//                break;
+//            }
+//
+//            // make sure there is still room to traverse on the current node
+//            if (in_node_index == -1) {
+//                if (current_nodes_index == 0) {
+//                    break;
+//                }
+//                current_nodes_index--;
+//                current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+//                in_node_index = gbz.graph.get_length(current_node) - 1;
+//            }
+//
+//            // traverse the nodes on the graph to get the same base
+////            std::cerr << first << " graph " << gbz.graph.get_base(current_node, in_node_index) << std::endl;
+//
+////            assert(first == gbz.graph.get_base(current_node, in_node_index));
+//
+//            in_node_index--;
+//
+//            // have to check if the current bwt position is in the bptree or not
+//            // calling search function if it return a gap run then this position is not currently in the tree and have to add it
+//            // if it returns a non-gap run then this position is already in the tree and we can continue traversing the bwt
+//            auto bptree_search = bptree.search(bwt_index);
+//
+//            // the current position is not in the tree
+//            if (bptree_search.graph_position.value == 0) {
+//                // adding the current position to the tree
+//                pos_t current_pos = pos_t{gbz.graph.get_id(current_node), gbz.graph.get_is_reverse(current_node),
+//                                          in_node_index + 1};
+//
+//                Run current_run = {bwt_index, gbwtgraph::Position::encode(current_pos)};
+//                local_tmp1.push_back(current_run);
+//
+//
+//            } else {
+//                // not adding the current position to the tree however checking if the tree position and the current graph
+//                // positions are the same
+//                pos_t current_pos = pos_t{gbz.graph.get_id(current_node), gbz.graph.get_is_reverse(current_node),
+//                                          in_node_index + 1};
+//                assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
+//            }
+//        }
+//
+//        // Lock to update shared data
+//        omp_set_lock(&lock);
+//        tmp1.insert(tmp1.end(), local_tmp1.begin(), local_tmp1.end());
+//        omp_unset_lock(&lock);
+//    }
+//
+//    cerr << "The traverse completed" << endl;
+//
+//    // Sort before inserting into the bptree
+////    std::sort(tmp1.begin(), tmp1.end());
+//
+//    // insert all the items in the tmp1 to the bptree
+//    for (auto &i: tmp1) {
+//        bptree.insert(i, 1);
+//    }
+//
+//    omp_destroy_lock(&lock);
+//}
 
 // This function returns a mapping from each node id to its component id
 std::unordered_map<nid_t, size_t> node_to_component(GBZ &gbz){

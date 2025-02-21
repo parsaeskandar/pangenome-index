@@ -109,10 +109,6 @@ int main(int argc, char **argv) {
 //    gbz = std::move(get<0>(input));
 
 
-    bool progress = true;
-    auto threshold = 0;
-    auto space_efficient_counting = false;
-
     typedef gbwtgraph::Key64::value_type kmer_type;
 
     hash_map<kmer_type, gbwtgraph::Position> index;
@@ -266,6 +262,7 @@ int main(int argc, char **argv) {
                 count++;
                 // print the decoded items of current_item and next item
                 if (count < 5) {
+
                     pos_t t1 = current_item.graph_position.decode();
                     cerr << "The current item is: " << current_item << endl;
                     cerr << "the graph position is " << t1 << endl;
@@ -276,6 +273,37 @@ int main(int argc, char **argv) {
 //                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
 //                }
             }
+        } else {
+            std::cerr << "================ERROR================ " << count << std::endl;
+            // this case should not happen other than when we are at the end
+            pos_t t1 = current_item.graph_position.decode();
+            cerr << "The current item is: " << current_item << endl;
+            cerr << "the graph position is " << t1 << endl;
+            cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+            cerr << "The current start position is " << current_item.start_position << endl;
+
+
+            auto next_it = it;
+            ++next_it;
+
+            if (next_it != bptree.end()){
+
+                panindexer::Run next_item = *next_it;
+
+                pos_t t2 = next_item.graph_position.decode();
+                cerr << "The current item is: " << next_item << endl;
+                cerr << "the graph position is " << t2 << endl;
+                cerr << "node id: " << id(t2) << " offset " << offset(t2) << " rev? " << is_rev(t2) << endl;
+                cerr << "The current start position is " << next_item.start_position << endl;
+
+                std::cerr << "==========================================================" << std::endl;
+
+            }
+
+
+
+
+
         }
     }
 
@@ -285,6 +313,8 @@ int main(int argc, char **argv) {
 
     panindexer::TagArray tag_array;
     tag_array.load_bptree(bptree, idx.bwt_size());
+
+    cerr << "The bptree loaded into Tag array DS correctly " << endl;
 
 //    auto node_to_comp = node_to_component(gbz);
 
