@@ -120,6 +120,8 @@ int main(int argc, char **argv) {
 
     unique_kmers_parallel<gbwtgraph::Key64>(gbz.graph, index, k);
 
+    std::cerr << "The number of unique kmers in the index is: " << index.size() << std::endl;
+
 #if TIME
     auto time2 = chrono::high_resolution_clock::now();
     std::chrono::duration<double> duration1 = time2 - time1;

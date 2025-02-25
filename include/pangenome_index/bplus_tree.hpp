@@ -186,7 +186,7 @@ namespace panindexer {
 //    }
 
         bool operator==(const Run &other) const {
-            return (start_position == other.start_position && graph_position == other.graph_position);
+            return (start_position == other.start_position && graph_position.value == other.graph_position.value);
         }
 
 
@@ -452,7 +452,7 @@ namespace panindexer {
                 }
             }
 
-            if (new_items.size() < 3 || inserted_index < 1) {
+            if (inserted_index < 1) {
                 if (prev != nullptr) {
                     bool res_prev = merge_item_prev(new_items);
                     if (!res_prev) {
@@ -482,24 +482,26 @@ namespace panindexer {
 
             new_items = run_insert(new_items, data, run_length, inserted_index);
             if (inserted_index == std::numeric_limits<size_t>::max()) {
-//            cout << "get here" << endl;
+//                std::cerr << "Here for data " << data << endl;
                 success = false;
                 return new_items;
             }
 
 //        if (DEEBUG) cout << "OOOOOO" << inserted_index << " " << new_items.size() << endl;
             // if the new item is added at the end of the node
-            if (new_items.size() < 3 || inserted_index == new_items.size()) {
+            if (inserted_index >= new_items.size()) {
                 if (next != nullptr) {
                     bool res = merge_item_next(new_items);
                     if (!res) {
+//                        std::cerr << "MERGE NEXT ERROR for data " << data << endl;
                         success = false;
-                        return items;
+                        return new_items;
+//                        return items;
                     }
                 }
             }
 
-            if (inserted_index == 0) {
+            if (inserted_index < 1) {
                 if (prev != nullptr) {
                     bool res_prev = merge_item_prev(new_items);
                     if (!res_prev) {
@@ -581,64 +583,12 @@ namespace panindexer {
 //            if (DEEBUG)
 //                cout << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!!"
 //                     << endl;
+//                cout << "================111111" << endl;
                 inserted_index = std::numeric_limits<size_t>::max();
                 return new_items;
             }
 
 
-
-//        // this case is when adding the new run has intersection with one of the adjacent runs
-//        // this is either error (if the graph position is not the same) or calling the run_insert for another run that
-//        // doesn't have intersection with the current runs
-//        if (index != gap_index){
-//            if (index == 0){
-//                // adding the new item at the first of the node, so have to check if the intersect run has the same graph position
-//                if (is_gap(new_items[index])){
-//                    // have to change the start position of the new_run to the gap run that happens after it and rerun the run_insert function
-//                    // It should never happen!
-//                    run_length -= (new_items[index].start_position - new_run.start_position);
-//                    new_run.start_position = new_items[index].start_position;
-//                    if (DEEBUG) cout << "intersect case 0.0" << endl;
-//                    new_items = run_insert(new_items, new_run, run_length, inserted_index);
-//                    inserted_index = 0;
-//                    return new_items;
-//                } else {
-//                    // in this case we call the run_insert but for a new run that starts from the start of the next run
-//                    if (DEEBUG) cout << "intersect case 0.1" << endl;
-//                    T temp = new_items[index];
-//                    new_items = run_insert(new_items, new_run, new_items[index].start_position - new_run.start_position, inserted_index);
-//                    if (new_run.start_position + run_length > temp.start_position) {
-//                        run_length -= (temp.start_position - new_run.start_position);
-//                        new_run.start_position = temp.start_position;
-//                        new_items = run_insert(new_items, new_run, run_length, inserted_index);
-//                    }
-//                    inserted_index = 0;
-//                    return new_items;
-//
-//
-//                }
-//
-//            } else {
-//                if (DEEBUG) cout << "intersect case 1" << endl;
-//                T temp = new_items[index];
-//                new_items = run_insert(new_items, new_run, new_items[index].start_position - new_run.start_position, inserted_index);
-//                run_length -= (temp.start_position - new_run.start_position);
-//                new_run.start_position = temp.start_position;
-//                if (DEEBUG) cout << "adding " << new_run << " with len " << run_length << endl;
-//                new_items = run_insert(new_items, new_run, run_length, inserted_index);
-//                // print all items in new_items
-//                if (DEEBUG) {
-//                    for (auto &item: new_items) {
-//                        cout << item << " ";
-//                    }
-//                    cout << "Done intersecting " << endl;
-//
-//                }
-//
-//                return new_items;
-//            }
-//
-//        }
 
 
             if (new_items.size() == 0) {
@@ -649,45 +599,30 @@ namespace panindexer {
                 return new_items;
             }
 
-//        cout << "BEFORE index: " << index << "len " << len << new_items[index] << endl;
-//        if (index > 1) cout << "item index - 1 " << new_items[index - 1] << endl;
-//        if (index == len){
-//            cout << "index is len " << new_items[index - 1] << endl;
-//            if (next != nullptr) cout << "next item " << next->get_item(0) << endl;
-//        }
 
 
             if (index == 0) {
-//            if (is_gap(new_items[index])) {
-//                // this is an error case and should not happen
-//                if (DEEBUG)
-//                    cout << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!"
-//                         << endl;
-//                inserted_index = std::numeric_limits<size_t>::max();
-//                return new_items;
-//
-//            }
+                // This case is when the new data start position is less than the first item start position
+
                 if (prev != nullptr && !is_gap(prev->get_item(prev->get_size() - 1))) {
                     // this is an error case and should not happen
 //                if (DEEBUG)
-//                    cout << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!"
+//                    cerr << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!"
 //                         << endl;
+//                    cout << "================222222" << endl;
                     inserted_index = std::numeric_limits<size_t>::max();
                     return new_items;
 
                 }
             } else {
                 if (!is_gap(new_items[index - 1])) {
-//                if (DEEBUG)
-//                    cout << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!!"
-//                         << endl;
+//                    cout << "================3333333" << endl;
                     inserted_index = std::numeric_limits<size_t>::max();
                     return new_items;
                 }
                 if (index == len) {
                     if (next != nullptr && new_run.start_position + run_length > next->get_item(0).start_position) {
-//                    if (DEEBUG) cout << "Error: the new run is not inserted correctly. The new run cannot inserted in another run!!"
-//                                    << endl;
+//                        cout << "================444444444" << endl;
                         inserted_index = std::numeric_limits<size_t>::max();
                         return new_items;
                     }
@@ -821,7 +756,7 @@ namespace panindexer {
                 }
 
                 // two cases here, first being the new run graph_position not be the same as the previous run graph_position
-                if ((new_run.graph_position.value != new_items[index - 2].graph_position.value) || index == 1) {
+                if ((new_run.graph_position.value != new_items[index - 2].graph_position.value)) {
 //                if (DEEBUG) std::cout << "insert run case 4.1" << std::endl;
                     // two cases here too! first being the new run graph_position not be the same as the next run graph_position
                     if (new_run.graph_position.value != new_items[index].graph_position.value) {
@@ -848,7 +783,7 @@ namespace panindexer {
 //                if (DEEBUG) std::cout << "insert run case 4.2" << std::endl;
                     // two cases here too! first being the new run graph_position not be the same as the next run graph_position
                     if (new_run.graph_position.value != new_items[index].graph_position.value) {
-//                    if (DEEBUG) std::cout << "insert run case 4.2.1" << std::endl;
+//                    std::cout << "insert run case 4.2.1" << std::endl;
 
                         // just remove the index - 1 run
                         new_items.erase(new_items.begin() + index - 1);
@@ -857,12 +792,12 @@ namespace panindexer {
                     }
                         // the other case is when the new run graph_position is the same as the next non-gap run graph_position
                     else if (new_run.graph_position.value == new_items[index].graph_position.value) {
-//                    if (DEEBUG) std::cout << "insert run case 4.2.2" << std::endl;
+//                    std::cerr << "insert run case 4.2.2" << std::endl;
                         // in this case we have to merge 3 runs together!
                         // in this case we only have to remove the index-1 and index runs
                         new_items.erase(new_items.begin() + index - 1);
                         new_items.erase(new_items.begin() + index - 1);
-                        inserted_index = index - 2;
+                        inserted_index = index - 1;
                         return new_items;
                     }
                 }
@@ -879,6 +814,7 @@ namespace panindexer {
 //                std::cerr << std::endl;
 //
 //            }
+//                cout << "================555555555" << endl;
                 inserted_index = std::numeric_limits<size_t>::max();
                 return new_items;
             }
@@ -893,10 +829,11 @@ namespace panindexer {
             vector <T> next_node_items = next->get_items();
 
             if (!is_gap(new_items[new_items.size() - 1])) {
-                return false;
+//                cerr << "MERGE: GAP";
+                return true;
             }
             if (next_node_items[0].start_position < new_items[new_items.size() - 1].start_position) {
-//            if (DEEBUG) cout << "Error: the next node is not in the correct order!" << endl;
+//                cerr << "MERGE: CASE2" << endl;
 //            new_items.pop_back();
 
                 return false;
@@ -923,8 +860,7 @@ namespace panindexer {
 //
 //            return false;
 //        }
-            if (prev_node_items[prev_node_items.size() - 1].graph_position == new_items[0].graph_position) {
-//            cout << "++++++++ " << new_items[0];
+            if (prev_node_items[prev_node_items.size() - 1].graph_position.value == new_items[0].graph_position.value) {
                 new_items.erase(new_items.begin());
                 return true;
             }
@@ -1391,7 +1327,6 @@ namespace panindexer {
             T data = {position, 0};
             bpNode<T> *current = leaf_search(root, data);
             size_t index = current->search(data);
-//        cout << "index " << index << endl;
             if (index == 0) {
                 if (current->get_prev() != nullptr) {
                     return current->get_prev()->get_item(current->get_prev()->get_size() - 1);
@@ -1406,7 +1341,7 @@ namespace panindexer {
 
 
         void insert(const T &data, size_t run_length) {
-            insert_success(data, run_length);
+            bool temp = insert_success(data, run_length);
         }
 
 

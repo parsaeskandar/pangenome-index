@@ -102,6 +102,11 @@ namespace panindexer {
             return queue_.empty();
         }
 
+        size_t size() {
+            std::unique_lock<std::mutex> lock(mutex_);
+            return queue_.size();
+        }
+
     private:
         std::queue<T> queue_;
         std::mutex mutex_;
@@ -123,7 +128,7 @@ namespace panindexer {
 
 
 
-void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair < Run, size_t>> &queue,
+void kmers_to_bplustree_worker(FastLocate &idx, std::vector<std::pair<Run, size_t>> &queue,
                                    hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
                                    size_t k, gbwt::range_type interval, const string &current_kmer) {
 
@@ -139,7 +144,9 @@ void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair < Run,
 
             Run run = {interval.first, it->second};
 
-            queue.push( {run, interval.second - interval.first + 1});
+            queue.push_back({run, interval.second - interval.first + 1});
+
+//            queue.push( {run, interval.second - interval.first + 1});
         }
         return;
     }
@@ -154,11 +161,14 @@ void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair < Run,
 void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
                                  hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index, size_t k,
                                  gbwt::range_type interval) {
+
+    int threads = omp_get_max_threads();
     // Thread-safe queue to collect results
     ThreadSafeQueue <std::pair<Run, size_t>> queue;
+    std::vector<std::vector<std::pair<Run, size_t>>> batches(threads);
 
     // number of threads
-    int threads = omp_get_max_threads();
+
     // splitting the starting range (0, idx.bwt_size() - 1) into parts and call the kmers_to_bplustree_worker function
     // for each part
     size_t part_size = idx.bwt_size();
@@ -175,16 +185,37 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
             end = idx.bwt_size() - 1; // TODO: CHECK
 //            end = idx.bwt_size() - 1;
         }
-        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
+
+        batches[i].reserve(end - start);
+        kmers_to_bplustree_worker(idx, batches[i], index, k, {start, end}, "");
 //        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
     }
 
 
+
+
+
     // Single-threaded insertion into BPlusTree
-    std::pair <Run, size_t> result;
-    while (queue.try_pop(result)) {
-        bptree.insert(result.first, result.second);
+//    std::pair <Run, size_t> result;
+    std::vector<std::pair<Run, size_t>> merged;
+    for (const auto &batch : batches) {
+        merged.insert(merged.end(), batch.begin(), batch.end());
     }
+
+    // Step 2: Sort based on Run.start_position
+//    std::sort(merged.begin(), merged.end(), [](const auto &a, const auto &b) {
+//        return a.first.start_position < b.first.start_position;
+//    });
+
+    std::cerr << "finished calculating the intervals with size " << merged.size() << std::endl;
+
+
+    for (const auto &item: merged){
+        bptree.insert(item.first, item.second);
+    }
+//    while (queue.try_pop(result)) {
+//        bptree.insert(result.first, result.second);
+//    }
 }
 
 vector <pair<Run, size_t>>
@@ -409,11 +440,14 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
 
     // **Sorting before insertion (if needed)**
-    std::sort(tmp1.begin(), tmp1.end());
+//    std::sort(tmp1.begin(), tmp1.end());
 
     std::cerr << "Adding " << tmp1.size() << " runs with size 1 to the BPlusTree" << std::endl;
 
+
+    size_t kkk = 0;
     for (auto &i : tmp1) {
+        std::cerr << kkk++ << std::endl;
         bptree.insert(i, 1);
     }
 

@@ -487,7 +487,7 @@ namespace panindexer {
 
 
 
-    void TagArray::query_compressed(size_t start, size_t end) {
+    void TagArray::query_compressed(size_t start, size_t end, size_t &number_of_runs) {
 
 
         // first have to find ranks of start and end in the bwt_intervals which are number of 1's less than start and end
@@ -508,10 +508,12 @@ namespace panindexer {
 
 
 
-        size_t number_of_runs = end_bit_index - first_bit_index + 1;
+        auto run_nums = end_bit_index - first_bit_index + 1;
+        number_of_runs = run_nums;
 
 
-        std::unordered_set <std::uint64_t> unique_positions;
+        std::vector<std::uint64_t> unique_positions;
+        unique_positions.reserve(run_nums);
 
         size_t current_tag_run_index = first_bit_index - (first_bit_index % this->encoded_start_every_k_run);
         size_t move_tags = first_bit_index % this->encoded_start_every_k_run;
@@ -529,7 +531,7 @@ namespace panindexer {
         }
 
 
-        while (number_of_runs > 0) {
+        while (run_nums > 0) {
             // the read function changes the bit_location to the next bit location
             decc = gbwt::ByteCode::read(this->encoded_runs, bit_location);
 
@@ -544,10 +546,13 @@ namespace panindexer {
 //            cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
 //            cerr << "Decoded node ID: " << decoded_node_id << endl;
 
-            number_of_runs--;
-            unique_positions.insert(
-                    gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
+            run_nums--;
+            unique_positions.push_back(gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
+//            unique_positions.insert(
+//                    gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
         }
+        std::sort(unique_positions.begin(), unique_positions.end());
+        unique_positions.erase(std::unique(unique_positions.begin(), unique_positions.end()), unique_positions.end());
 
     }
 
