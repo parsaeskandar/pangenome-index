@@ -142,7 +142,7 @@ int main(int argc, char **argv) {
 
     cerr << "sample kmers created" << endl;
 
-    std::vector <int> k_value = {10, 30, 50, 100, 200, 500, 1000, 2000};
+    std::vector <int> k_value = {10, 15, 20, 30, 50, 100, 200, 500, 1000, 2000};
 
     for (int k: k_value) {
 

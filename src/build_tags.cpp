@@ -39,7 +39,7 @@ int main(int argc, char **argv) {
     std::string rlbwt_file = std::string(argv[2]);
     std::string output_file = std::string(argv[3]);
 
-    int threads = 8;
+    int threads = 16;
 //    omp_set_num_threads(threads);
     size_t k = 31;
 

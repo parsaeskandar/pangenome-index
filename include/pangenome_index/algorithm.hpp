@@ -440,14 +440,12 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
 
     // **Sorting before insertion (if needed)**
-//    std::sort(tmp1.begin(), tmp1.end());
+    std::sort(tmp1.begin(), tmp1.end());
 
     std::cerr << "Adding " << tmp1.size() << " runs with size 1 to the BPlusTree" << std::endl;
 
 
-    size_t kkk = 0;
     for (auto &i : tmp1) {
-        std::cerr << kkk++ << std::endl;
         bptree.insert(i, 1);
     }
 

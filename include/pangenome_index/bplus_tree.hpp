@@ -237,6 +237,16 @@ namespace panindexer {
             items.clear();
         }
 
+        bool operator==(const bpNode<T>& other) const {
+            return (degree == other.degree) &&
+                   (leaf == other.leaf) &&
+                   (items == other.items) &&
+                   (children == other.children) &&
+                   (parent == other.parent) &&
+                   (next == other.next) &&
+                   (prev == other.prev);
+        }
+
         // set next
         void set_next(bpNode<T> *next_node) {
             next = next_node;
@@ -321,7 +331,11 @@ namespace panindexer {
 
         // check if it is underflowing
         bool is_underflowing() const {
-            return items.size() < degree / 2;
+            if (leaf) {
+                return items.size() < ((degree + 1) / 2 - 1);
+            } else {
+                return children.size() < ((degree + 1) / 2 - 1);
+            }
         }
 
         // remove the item at ith position
@@ -374,6 +388,7 @@ namespace panindexer {
 
         void remove_first_item() {
             items.erase(items.begin());
+
             // change the parent corresponding item
 //        if (parent != nullptr) {
 //            auto index_parent = this->find_index_in_parent();
@@ -412,6 +427,7 @@ namespace panindexer {
         void replace_items_leaf(vector <T> new_items) {
 //        if (DEEBUG) cout << "replacing items in leaf node" << endl;
             items.assign(new_items.begin(), new_items.end());
+
         }
 
         // replace children
@@ -503,6 +519,7 @@ namespace panindexer {
 
             if (inserted_index < 1) {
                 if (prev != nullptr) {
+
                     bool res_prev = merge_item_prev(new_items);
                     if (!res_prev) {
                         success = false;
@@ -577,7 +594,7 @@ namespace panindexer {
                     std::lower_bound(new_items.begin(), new_items.end(),
                                      create_gap(new_run.start_position + run_length)) -
                     new_items.begin();
-//        cout << "index: " << index << "len " << len << endl;
+//            cerr << "index: " << index << "len " << len << " gap index " << gap_index << endl;
 
             if (gap_index - index > 0) {
 //            if (DEEBUG)
@@ -731,7 +748,7 @@ namespace panindexer {
                 // forth case, which is when we hit both runs from both sides
             else if (new_run.start_position == new_items[index - 1].start_position &&
                      new_run.start_position + run_length == new_items[index].start_position) {
-//            if (DEEBUG) std::cout << "insert run case 4" << std::endl;
+//                std::cerr << "insert run case 4" << std::endl;
 
                 // if index = 1 then we do not have to check for the index-2 run
                 if (index == 1) {
@@ -834,6 +851,7 @@ namespace panindexer {
             }
             if (next_node_items[0].start_position < new_items[new_items.size() - 1].start_position) {
 //                cerr << "MERGE: CASE2" << endl;
+//                next->print();
 //            new_items.pop_back();
 
                 return false;
@@ -854,8 +872,11 @@ namespace panindexer {
 
         bool merge_item_prev(vector <T> &new_items) {
             assert(prev != nullptr);
+            assert(!new_items.empty());
 //        if (DEEBUG) cout << "merging with the prev node" << endl;
             vector <T> prev_node_items = prev->get_items();
+
+//            std::cerr << new_items[0] << " " <<  prev_node_items[prev_node_items.size() - 1] << endl;
 //        if (!is_gap(prev_node_items[prev_node_items.size() - 1])){
 //
 //            return false;
@@ -992,16 +1013,32 @@ namespace panindexer {
         // all of these cases. The input node is the node that we want to remove from the tree.
 
         void remove_from_parent(bpNode<T> *node) {
-//        if (DEEBUG) cout << "removing from parent node" << endl;
+//            cerr << "removing from parent node" << endl;
 
             bpNode<T> *parent = node->get_parent();
             assert(parent != nullptr);
 
             int index = node->find_index_in_parent();
 
+//            std::cerr << "Index and The parent node is " << index << endl;
+//            parent->print();
+
+//            std::cerr << "The item we are deleting " << parent->get_item(index - 1) << endl;
+//            std::cerr << "parent child size " << parent->get_children().size() << endl;
+//            std::cerr << "The child that we are removing is " << endl;
+//            parent->get_child(index)->print();
             // Remove the item and the corresponding child from the parent
             parent->remove_item(index - 1);
             parent->remove_child(index);
+
+//            std::cerr << "PARENT AFTER REMOVING size " << parent->get_children().size() << endl;
+//            parent->print();
+
+
+//            std::cerr << "PARENT CHILDREN AFTER REMOVING " << endl;
+//            for (auto &chil: parent->get_children()) {
+//                chil.get_items()[0];
+//            }
 
 //        if (DEEBUG) {
 //            if (parent->get_size() > 0) {
@@ -1018,6 +1055,8 @@ namespace panindexer {
 
             // If the parent is the root and it becomes empty, make the current node the new root
             if (parent->is_root() && parent->get_size() == 0) {
+
+//                std::cerr << "FUCKED UP 8" << endl;
                 bpNode<T> *new_root = parent->get_child(0);
 
                 root = new_root;
@@ -1031,6 +1070,7 @@ namespace panindexer {
 
             // If the parent is underflowing, handle the underflow
             if (parent->is_underflowing()) {
+//                std::cerr << "recursively underflowing" << endl;
                 handle_parent_underflow(parent);
             }
         }
@@ -1045,6 +1085,8 @@ namespace panindexer {
             // This will probably never happen!
             if (node->is_root() && node->get_size() == 0) {
 
+//                std::cerr << "FUCKED UP 1" << endl;
+
                 root = node->get_child(0);
                 root->set_parent(nullptr);
                 root->set_next(nullptr);
@@ -1055,6 +1097,7 @@ namespace panindexer {
             }
 
             if (node->is_root()) {
+//                std::cerr << "FUCKED UP 2" << endl;
                 return;
             }
 
@@ -1065,6 +1108,7 @@ namespace panindexer {
 
             // Borrow from the left sibling
             if (index > 0 && parent->get_child(index - 1)->get_size() > degree / 2) {
+//                std::cerr << "FUCKED UP 3" << endl;
 //            if (DEEBUG) cout << "borrowing from the left sibling (parent underflow)" << endl;
 
                 bpNode<T> *left_sibling = parent->get_child(index - 1);
@@ -1095,6 +1139,7 @@ namespace panindexer {
 
                 // Borrow from the right sibling
             } else if (index < parent->get_size() && parent->get_child(index + 1)->get_size() > degree / 2) {
+//                std::cerr << "FUCKED UP 4" << endl;
 //            if (DEEBUG) cout << "borrowing from the right sibling (parent underflow)" << endl;
 
                 bpNode<T> *right_sibling = parent->get_child(index + 1);
@@ -1112,6 +1157,7 @@ namespace panindexer {
 
                 // Merge with the left sibling
             } else if (index > 0) {
+//                std::cerr << "FUCKED UP 5" << endl;
 //            if (DEEBUG) cout << "merging with the left sibling (parent underflow)" << endl;
 
                 bpNode<T> *left_sibling = parent->get_child(index - 1);
@@ -1140,6 +1186,7 @@ namespace panindexer {
 
                 // Merge with the right sibling
             } else if (index < parent->get_size()) {
+//                std::cerr << "FUCKED UP 6" << endl;
 //            if (DEEBUG) cout << "merging with the right sibling (parent underflow)" << endl;
 
                 bpNode<T> *right_sibling = parent->get_child(index + 1);
@@ -1151,7 +1198,7 @@ namespace panindexer {
 
                 for (int i = 0; i < right_sibling->get_size(); i++) {
                     node->add_item(right_sibling->get_item(i));
-                    node->add_child(right_sibling->get_child(i));
+                    node->add_child(right_sibling->get_child(i + 1));
                 }
 
                 // change the parents of the newly added children
@@ -1193,15 +1240,18 @@ namespace panindexer {
             bpNode<T> *parent = node->get_parent();
             int index = node->find_index_in_parent();
 
+            if (index == 0) assert(parent->get_children().size() > 0);
+
 
 //        if (DEEBUG) cout << index << endl;
 
             // the left siblings exists and has enough items to borrow
-            if (index > 0 && parent->get_child(index - 1)->get_size() > degree / 2) {
+            if (index > 0 && parent->get_child(index - 1)->get_size() > (degree + 1) / 2 - 1) {
                 // borrow from the left sibling
 //            if (DEEBUG) cout << "borrowing from the left sibling" << endl;
 
                 bpNode<T> *left_sibling = parent->get_child(index - 1);
+
 
                 assert(left_sibling->get_next() == node);
                 assert(node->get_prev() == left_sibling);
@@ -1213,7 +1263,7 @@ namespace panindexer {
 
 
                 // the right sibling exists and has enough items to borrow
-            } else if (index < parent->get_size() && parent->get_child(index + 1)->get_size() > degree / 2) {
+            } else if (index < parent->get_size() && parent->get_child(index + 1)->get_size() > (degree + 1) / 2 - 1) {
                 // borrow from the right sibling
 //            if (DEEBUG) cout << "borrowing from the right sibling" << endl;
 
@@ -1236,6 +1286,9 @@ namespace panindexer {
 //            if (DEEBUG) cout << "merging with the left sibling" << endl;
                 bpNode<T> *left_sibling = parent->get_child(index - 1);
 
+//                std::cerr << "LEFT SIBLING " << endl;
+//                left_sibling->print();
+
 
                 assert(left_sibling->get_next() == node);
                 assert(node->get_prev() == left_sibling);
@@ -1254,16 +1307,21 @@ namespace panindexer {
                 remove_from_parent(node);
                 delete node;
 
+//                std::cerr << "==============================Node Deleted=======================" << std::endl;
+
                 // TODO: call the remove from a non-leaf node function
                 // TODO: remove the actual node itself
 
                 if (left_sibling->get_next() != nullptr) assert(left_sibling->get_next()->get_prev() == left_sibling);
 
                 // right sibling exists and we can merge with it
-            } else if (index < parent->get_size()) {
+            } else if (index <= parent->get_size()) {
                 // merge with the right sibling
 //            if (DEEBUG) cout << "merging with the right sibling" << endl;
                 bpNode<T> *right_sibling = parent->get_child(index + 1);
+
+//                std::cerr << "RIGHT SIBLING " << endl;
+//                right_sibling->print();
 
                 assert(right_sibling->get_prev() == node);
                 assert(node->get_next() == right_sibling);
@@ -1273,8 +1331,8 @@ namespace panindexer {
                 }
 
                 node->set_next(right_sibling->get_next());
-                if (right_sibling->get_next() != nullptr) {
-                    right_sibling->get_next()->set_prev(node);
+                if (node->get_next() != nullptr) {
+                    node->get_next()->set_prev(node);
                 }
 
                 remove_from_parent(right_sibling);
@@ -1283,6 +1341,7 @@ namespace panindexer {
                 // TODO: call the remove from a non-leaf node function
                 // TODO: remove the actual node itself
 
+//                std::cerr << "++++++++++++++++++++++++++ RIGHT SIBLING DELETED +++++++++++++++++++++++" << std::endl;
                 assert(node->get_next()->get_prev() == node);
             }
         }
@@ -1346,6 +1405,7 @@ namespace panindexer {
 
 
         bool insert_success(const T &data, size_t run_length) {
+//            std::cerr << "inserting: " << data << " " << run_length << endl;
             bool success = true;
             if (root == nullptr) {
                 root = new bpNode<T>(degree, true);
@@ -1353,17 +1413,64 @@ namespace panindexer {
                 root->replace_items_leaf(temp);
 
             } else {
+                Run temp_data = {479767, 0};
+//                bpNode<T> *test = leaf_search(root, temp_data);
+//                std::cerr << "000000000000000000TEST" << endl;
+//                test->print();
+//                if (test->get_next() != nullptr) {
+//                    test->get_next()->print();
+//                }
+//                std::cerr << "000000000000000000TEST END" << endl;
+
                 bpNode<T> *leaf = leaf_search(root, data);
+//                leaf->print();
                 vector <T> inserted_items = leaf->insert_success(data, run_length, success);
                 if (!success) {
+//                    std::cerr << "NOT SUCCESS" << endl;
                     return success;
                 }
+
+//                if (leaf->get_next() != nullptr && leaf->get_next()->is_underflowing()){
+//                    std::cerr << "Next NODE IS UNDERFLOWING AFTER INSERT SUCCESS" << std::endl;
+//                }
+//                if (leaf->get_prev() != nullptr && leaf->get_prev()->is_underflowing()){
+//                    std::cerr << "PREVVV NODE IS UNDERFLOWING AFTER INSERT SUCCESS" << std::endl;
+//                }
                 // print the items in inserted_items
 //            if (DEEBUG) for (auto &item: inserted_items) { cout << "item: " << item << endl; }
 
                 if (inserted_items.size() <= degree) {
                     leaf->replace_items_leaf(inserted_items);
                 } else {
+//                    if (leaf->get_next() != nullptr && leaf->get_next()->is_underflowing()){
+//                        std::cerr << "((((((((((FURST)))))))))))" << endl;
+//                        int index = leaf->get_next()->find_index_in_parent();
+//                        T borrowed_item = inserted_items.back();
+//                        leaf->get_next()->add_item(borrowed_item, 0);
+//                        inserted_items.pop_back();
+//                        leaf->get_parent()->change_item(borrowed_item, index - 1);
+//                    }
+//
+//                    if (leaf->get_prev() != nullptr && leaf->get_prev()->is_underflowing()){
+//                        std::cerr << "((((((((((Second)))))))))))" << endl;
+//
+//                        int index = leaf->find_index_in_parent();
+//                        T borrowed_item = inserted_items[0];
+//                        inserted_items.erase(inserted_items.begin());
+//                        leaf->get_prev()->add_item(borrowed_item);
+//
+//                        leaf->get_parent()->change_item(inserted_items[0], index - 1);
+//                    }
+//
+//                    if (inserted_items.size() <= degree){
+//                        std::cerr << "((((((((((Third)))))))))))" << endl;
+//                        leaf->replace_items_leaf(inserted_items);
+//                    } else {
+
+//                    std::cerr << "EASY CASE" << endl;
+
+
+
                     // split the node
 //                if (DEEBUG) cout << "splitting the node" << endl;
                     bpNode<T> *new_node = new bpNode<T>(degree, true);
@@ -1426,23 +1533,42 @@ namespace panindexer {
                         // a parent exists
                         parent_insert(leaf->get_parent(), parent_item, new_node);
                     }
+//                    }
                 }
 
+//                std::cerr << "HERE" << endl;
+
                 if (leaf->get_next() != nullptr) assert(leaf->get_next()->get_prev() == leaf);
+
+//                if (data.graph_position.value == 413982382081) {
+//                    std::cerr << "XXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREV" << endl;
+//                    leaf->get_prev()->print();
+//                    std::cerr << "LEAF" << endl;
+//                    leaf->print();
+//                    std::cerr << "NEXT" << endl;
+//                    leaf->get_next()->print();
+//
+//                }
 
                 // handle the underflow of the next node
                 if (leaf->get_next() != nullptr && leaf->get_next()->is_underflowing()) {
 
-//                if (DEEBUG) cout << "underflow in the next node" << endl;
+//                    cerr << "underflow in the next node " << leaf->get_size() << " " << leaf->get_next()->get_size() << endl;
                     leaf_underflow(leaf->get_next());
+//                    cerr << leaf->get_size() << " " << leaf->get_next()->get_size() << endl;
                 }
 
 
                 // handle the underflow
-                if (leaf->is_underflowing()) {
-//                if (DEEBUG) cout << "underflow in the working node" << endl;
+                if (leaf->is_underflowing() && leaf != nullptr && leaf->get_size() != 0) {
+//                    cerr << "working node " << leaf->get_size() << endl;
                     leaf_underflow(leaf);
+//                    cerr << "WORKING NODE AFTER " << leaf->get_size() << endl;
                 }
+
+//                if (leaf->get_prev() != nullptr && leaf->get_prev()->is_underflowing()) {
+//                    leaf_underflow(leaf->get_prev());
+//                }
 
 
             }
