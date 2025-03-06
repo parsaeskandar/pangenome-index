@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    int threads = 8;
+    int threads = 32;
     omp_set_num_threads(threads);
 
     std::string gbz_graph = std::string(argv[1]);
@@ -596,7 +596,7 @@ int main(int argc, char **argv) {
 
 
     // ############################################## variables to change
-    size_t run_per_thread = 1000;
+    size_t run_per_thread = 500;
     int encoded_start_every_k_run = 10;
 
 
@@ -661,7 +661,7 @@ int main(int argc, char **argv) {
     while (first != end){
 
         auto seq_id = r_index.seqId(first);
-        std::cerr << "Seq id " << seq_id << std::endl;
+//        std::cerr << "Seq id " << seq_id << std::endl;
         // want to get the file number that is associated with the seq id
         auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
 
