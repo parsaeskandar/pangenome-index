@@ -1413,11 +1413,24 @@ namespace panindexer {
                 root->replace_items_leaf(temp);
 
             } else {
-                Run temp_data = {479767, 0};
+//                Run temp_data = {9211, 0};
+//                Run tt_data = data;
+//                if (data.start_position == 9211) {
+////                    std::cerr << "000000000000000000" << endl;
+//                    std::cerr << "inserting: " << data << " " << run_length << endl;
+//                    bpNode<T> *test = leaf_search(root, temp_data);
+//                    std::cerr << "000000000000000000TEST" << endl;
+//                    test->print();
+//                    if (test->get_next() != nullptr) {
+//                        std::cerr << "000000000000000000TEST NEXT" << endl;
+//                        test->get_next()->print();
+//                    }
+//                }
 //                bpNode<T> *test = leaf_search(root, temp_data);
 //                std::cerr << "000000000000000000TEST" << endl;
 //                test->print();
 //                if (test->get_next() != nullptr) {
+//                    std::cerr << "000000000000000000TEST NEXT" << endl;
 //                    test->get_next()->print();
 //                }
 //                std::cerr << "000000000000000000TEST END" << endl;
@@ -1540,7 +1553,7 @@ namespace panindexer {
 
                 if (leaf->get_next() != nullptr) assert(leaf->get_next()->get_prev() == leaf);
 
-//                if (data.graph_position.value == 413982382081) {
+//                if (data.start_position == 9211) {
 //                    std::cerr << "XXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREVXXXXXXPREV" << endl;
 //                    leaf->get_prev()->print();
 //                    std::cerr << "LEAF" << endl;

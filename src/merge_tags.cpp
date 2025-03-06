@@ -136,12 +136,12 @@ public:
 
 
 
-    std::vector<std::vector<std::pair<pos_t, uint8_t>>> extract_requested_tags(
+    std::vector<std::vector<std::pair<pos_t, uint16_t>>> extract_requested_tags(
             size_t thread_id, const std::vector<size_t>& requests) {
 
         waitForTurn(thread_id);
 
-        std::vector<std::vector<std::pair<pos_t, uint8_t>>> extracted_tags(files.size());
+        std::vector<std::vector<std::pair<pos_t, uint16_t>>> extracted_tags(files.size());
 
         for (size_t i = 0; i < files.size(); i++) {
             size_t current_extracted = 0;
@@ -222,7 +222,7 @@ private:
         for (size_t i = 0; i < files.size(); i++) {
             if (current_length_tag_batch[i] < batch_size / 3 && !file_end_reached[i]) {
                 size_t remaining_tags = current_length_tag_batch[i];
-                std::vector <std::pair<pos_t, uint8_t>> new_tags;
+                std::vector <std::pair<pos_t, uint16_t>> new_tags;
                 size_t new_tags_size = 0;
                 while (new_tags_size + remaining_tags < batch_size) {
                     if (file_positions[i] >= file_buffers[i].size()) {
@@ -278,7 +278,7 @@ private:
     std::vector <sdsl::int_vector_buffer<8>> file_buffers; // File buffers for reading
     size_t batch_size;                      // Number of tags to read in a batch
     std::vector <size_t> current_index_tag_batch; // Current index of tag batch for each file
-    std::vector <std::vector<std::pair < pos_t, uint8_t>>> tag_batches; // buffer of tags of each tag_file
+    std::vector <std::vector<std::pair < pos_t, uint16_t>>> tag_batches; // buffer of tags of each tag_file
     std::vector <size_t> current_length_tag_batch; // Remaining length of tag batch for each file
 
 };
@@ -286,7 +286,7 @@ private:
 
 // This function extract the tags starting from the starting_run first position to the starting_run + runs_per_thread last position
 void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t thread_id, std::vector<int> comp_to_file,
-                        unordered_map <size_t, size_t> seq_id_to_comp_id, std::vector<std::pair<pos_t, uint8_t>> &buffer,
+                        std::vector<size_t> seq_id_to_comp_id, std::vector<std::pair<pos_t, uint16_t>> &buffer,
                         size_t starting_run, size_t runs_per_thread) {
     buffer.clear();
 
@@ -365,12 +365,12 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
     }
 
     // we have the tags we want to extract from each file. now we extract the tags for each index
-    std::vector<std::vector<std::pair<pos_t, uint8_t>>> run_tags = reader.extract_requested_tags(thread_id, request);
+    std::vector<std::vector<std::pair<pos_t, uint16_t>>> run_tags = reader.extract_requested_tags(thread_id, request);
 
 
     pos_t current_tag;
     size_t current_index = 0;
-    std::vector<std::pair<pos_t, uint8_t>> temp_buffer;
+    std::vector<std::pair<pos_t, uint16_t>> temp_buffer;
 
     vector<size_t> current_index_run_tags_file;
     current_index_run_tags_file.resize(run_tags.size(), 0);
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    int threads = 32;
+    int threads = 8;
     omp_set_num_threads(threads);
 
     std::string gbz_graph = std::string(argv[1]);
@@ -497,19 +497,28 @@ int main(int argc, char **argv) {
 
     std::cerr << "The mapping from comp to tag files is done" << std::endl;
 
-    unordered_map <size_t, size_t> seq_id_to_comp_id;
 
+    auto total_strings = r_index.tot_strings();
+    std::vector<size_t> seq_id_to_comp_id;
+    seq_id_to_comp_id.resize(total_strings);
+
+
+
+    // TODO: make this multithreaded
     // get the first node of each path and get the component id of the node
-    for (size_t i = 0; i < r_index.tot_strings(); i++) {
+#pragma omp parallel for
+    for (size_t i = 0; i < total_strings; i++) {
         auto seq_graph_nodes = gbz.index.extract(i * 2);
-        // extracting the first node of the sequence component id
-        seq_id_to_comp_id[i] = node_to_comp_map[gbwt::Node::id(seq_graph_nodes[0])];
+        if (!seq_graph_nodes.empty()) {
+            size_t node_id = gbwt::Node::id(seq_graph_nodes[0]);
+            seq_id_to_comp_id[i] = node_to_comp_map.at(node_id);
+        }
     }
     std::cerr << "The mapping from seq id to comp id is done" << std::endl;
 
 
     // note that the first #num_seq tags are correspond to the ENDMARKERs
-    auto total_tags_count = r_index.get_sequence_size() - r_index.tot_strings();
+    auto total_tags_count = r_index.get_sequence_size() - total_strings;
     std::cerr << "Total tags count " << total_tags_count << std::endl;
 
 
@@ -524,7 +533,7 @@ int main(int argc, char **argv) {
     std::cerr << "Thread lists " << std::endl;
     std::vector <std::thread> threads_list;
     threads_list.reserve(threads);
-    std::vector<std::vector<std::pair<pos_t, uint8_t>>> thread_buffers(threads);
+    std::vector<std::vector<std::pair<pos_t, uint16_t>>> thread_buffers(threads);
 
 
     const std::string filename = "whole_genome_tag_array_compressed.tags";
@@ -599,18 +608,19 @@ int main(int argc, char **argv) {
     size_t encoded_start_ones = 0;
     size_t start_pos = 0;
 
+
 //    TagArray tag_array;
 
 
 
     size_t tag_count = 0;
     size_t tag_run_count = 0;
-    std::pair<pos_t, uint8_t> previous_last_run;
-    std::vector<std::pair<pos_t, uint8_t>> temp_tag_runs;
+    std::pair<pos_t, uint16_t> previous_last_run;
+    std::vector<std::pair<pos_t, uint16_t>> temp_tag_runs;
 
     // have to calculate the number of ENDMARKERS at the beginning of the r-index and put special value 0 for them
-    auto num_endmarkers = r_index.tot_strings();
-//    std::vector<std::pair<pos_t, uint8_t>> endmarkers = {std::make_pair(pos_t{0, 0, 0}, num_endmarkers)};
+    auto num_endmarkers = total_strings;
+//    std::vector<std::pair<pos_t, uint16_t>> endmarkers = {std::make_pair(pos_t{0, 0, 0}, num_endmarkers)};
     temp_tag_runs.push_back(std::make_pair(pos_t{0, 0, 0}, num_endmarkers));
 //    tag_array.serialize_run_by_run(out, endmarkers);
     tag_count += num_endmarkers;
@@ -745,7 +755,7 @@ int main(int argc, char **argv) {
         }
         size_t thread_id = to_write % threads;
         threads_list[thread_id].join();
-        std::vector<std::pair<pos_t, uint8_t>> current_tags;
+        std::vector<std::pair<pos_t, uint16_t>> current_tags;
         current_tags.swap(thread_buffers[thread_id]);
 
         if (to_write + threads < number_of_jobs) {
@@ -766,7 +776,7 @@ int main(int argc, char **argv) {
         if (current_tags[0].first == previous_last_run.first) {
             current_tags[0].second += previous_last_run.second;
         } else {
-            std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
+            std::vector<std::pair<pos_t, uint16_t>> temp = {previous_last_run};
             tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp);
 
 //            std::cerr << "Handling the previous last run" << std::endl;
@@ -787,7 +797,7 @@ int main(int argc, char **argv) {
 //
 //            remaining_run_to_write_start++;
 
-//                std::vector<std::pair<pos_t, uint8_t>> temp = {previous_last_run};
+//                std::vector<std::pair<pos_t, uint16_t>> temp = {previous_last_run};
 //
 //                tag_array.serialize_run_by_run(out, temp);
 

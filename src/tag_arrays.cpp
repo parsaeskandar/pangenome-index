@@ -38,10 +38,15 @@ namespace panindexer {
                     Run next_item = *next_it;
                     // adding the pair (graph_value, length) as ByteCode to the encoded_runs vector
                     pos_t current_pos = current_item.graph_position.decode();
+//                    gbwt::size_type encoded =
+////                            (gbwtgraph::offset(current_pos)) | (gbwtgraph::is_rev(current_pos) << 10) |
+////                            ((next_item.start_position - current_item.start_position) << 11) |
+////                            (gbwtgraph::id(current_pos) << 19);
                     gbwt::size_type encoded =
                             (gbwtgraph::offset(current_pos)) | (gbwtgraph::is_rev(current_pos) << 10) |
-                            ((next_item.start_position - current_item.start_position) << 11) |
-                            (gbwtgraph::id(current_pos) << 19);
+                            ((next_item.start_position - current_item.start_position) << 11) |  // Now uses 9 bits
+                            (gbwtgraph::id(current_pos) << 20);  // Adjust the shift to 20 instead of 19
+
                     encoded_runs_starts[encoded_runs.size()] = 1;
 
 //                    cout << encoded_runs.size() << endl;
@@ -91,10 +96,10 @@ namespace panindexer {
         cerr << "Finished serializing" << endl;
     }
 
-    void TagArray::serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint8_t>>& tag_runs) {
+    void TagArray::serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint16_t>>& tag_runs) {
         for (const auto& [value, run_length] : tag_runs) {
             out.write(reinterpret_cast<const char*>(&value), sizeof(pos_t));
-            out.write(reinterpret_cast<const char*>(&run_length), sizeof(uint8_t));
+            out.write(reinterpret_cast<const char*>(&run_length), sizeof(uint16_t));
         }
     }
 
@@ -106,11 +111,11 @@ namespace panindexer {
         }
 
         pos_t value;
-        uint8_t run_length;
+        uint16_t run_length;
 //        int i = 0;
 
         while (in.read(reinterpret_cast<char*>(&value), sizeof(pos_t))) {
-            in.read(reinterpret_cast<char*>(&run_length), sizeof(uint8_t));
+            in.read(reinterpret_cast<char*>(&run_length), sizeof(uint16_t));
             // print the value and run_length
 //            std::cerr << i << " " << value << " " << int(run_length) << std::endl;
 //            i++;
@@ -222,10 +227,16 @@ namespace panindexer {
             // the read function changes the bit_location to the next bit location
             decc = gbwt::ByteCode::read(encoded_runs, bit_location);
 
+//            size_t decoded_offset = decc & ((1LL << 10) - 1);
+//            bool decoded_flag = (decc >> 10) & 0x1;
+//            uint16_t decoded_length = (decc >> 11) & 0xFF;
+//            int64_t decoded_node_id = (decc >> 19);
+
             size_t decoded_offset = decc & ((1LL << 10) - 1);
             bool decoded_flag = (decc >> 10) & 0x1;
-            uint8_t decoded_length = (decc >> 11) & 0xFF;
-            int64_t decoded_node_id = (decc >> 19);
+            uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
+            int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
+
 
             // print
             cerr << "Decoded offset: " << decoded_offset << endl;
@@ -271,14 +282,15 @@ namespace panindexer {
 
 
 
-    std::pair<pos_t, uint8_t> TagArray::decode_run(gbwt::size_type decc) {
+    std::pair<pos_t, uint16_t> TagArray::decode_run(gbwt::size_type decc) {
         size_t decoded_offset = decc & ((1LL << 10) - 1);
         bool decoded_flag = (decc >> 10) & 0x1;
-        uint8_t decoded_length = (decc >> 11) & 0xFF;
-        int64_t decoded_node_id = (decc >> 19);
+        uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
+        int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
+
 
         pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
-        std::pair<pos_t, uint8_t> result = std::make_pair(graph_pos, decoded_length);
+        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
 
         return result;
     }
@@ -289,7 +301,7 @@ namespace panindexer {
 
 
     // Function to load a run starting from a specified position in the file and return the start of the next run
-    std::pair<pos_t, uint8_t> TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
+    std::pair<pos_t, uint16_t> TagArray::load_block_at(std::istream &in, size_t &next_block_start) {
         // Seek to the start position of the current run
         in.seekg(next_block_start, std::ios::beg);
         if (in.fail()) {
@@ -332,11 +344,11 @@ namespace panindexer {
         // Extract values from the decoded byte
         size_t decoded_offset = decc & ((1LL << 10) - 1);
         bool decoded_flag = (decc >> 10) & 0x1;
-        uint8_t decoded_length = (decc >> 11) & 0xFF;
-        int64_t decoded_node_id = (decc >> 19);
+        uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
+        int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
 
         pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
-        std::pair<pos_t, uint8_t> result = std::make_pair(graph_pos, decoded_length);
+        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
 
 
 //         Output the decoded information for debugging
@@ -418,11 +430,11 @@ namespace panindexer {
         out.close();
     }
 
-    void TagArray::compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint8_t>> &tag_runs){
+    void TagArray::compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs){
         std::vector<gbwt::byte_type> encoded_runs;
         if (tag_runs.size() > 0) {
             for (const auto& [value, run_length] : tag_runs) {
-                std::cerr << value << " " << (int) run_length << std::endl;
+//                std::cerr << value << " " << (int) run_length << std::endl;
 
                 // keeping the data for creating the bwt_intervals
                 bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
@@ -440,7 +452,7 @@ namespace panindexer {
                 gbwt::size_type encoded =
                         (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
                         (run_length << 11) |
-                        (gbwtgraph::id(value) << 19);
+                        (gbwtgraph::id(value) << 20);
 
                 gbwt::ByteCode::write(encoded_runs, encoded);
 
@@ -537,8 +549,8 @@ namespace panindexer {
 
             size_t decoded_offset = decc & ((1LL << 10) - 1);
             bool decoded_flag = (decc >> 10) & 0x1;
-            uint8_t decoded_length = (decc >> 11) & 0xFF;
-            int64_t decoded_node_id = (decc >> 19);
+            uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
+            int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
 
             // print
 //            cerr << "Decoded offset: " << decoded_offset << endl;
