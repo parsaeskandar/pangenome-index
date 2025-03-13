@@ -26,11 +26,13 @@ namespace panindexer {
 
     class TagArray {
     public:
+//        TagArray(int length_bits);
         TagArray();
 
 //    void TagArray::add_run(size_t offset, bool is_reverse, int length, size_t node_id);
 
         void load_bptree(BplusTree<Run> &bptree, size_t bwt_size);
+        void load_bptree_lite(BplusTree <Run> &bptree);
         void serialize(std::ostream& out);
         void load(std::istream& in);
         void query(size_t start, size_t end);
@@ -42,7 +44,9 @@ namespace panindexer {
         static std::pair<pos_t, uint16_t> load_block_at(std::istream& in, size_t &next_block_start);
 
         void store_blocks_sdsl(std::string filename);
+
         static std::pair<pos_t, uint16_t> decode_run(gbwt::size_type decc);
+        gbwt::size_type encode_run_length(size_t offset, bool is_rev, uint16_t length, int64_t node_id);
 
         vector<pair<pos_t, uint16_t>> get_tag_runs(){
             return tag_runs;
@@ -71,6 +75,11 @@ namespace panindexer {
         sdsl::sd_vector<>::rank_1_type bwt_intervals_rank;
 
         vector<pair<pos_t, uint16_t>> tag_runs;
+
+
+
+        // Variables for encoding/decoding
+        const static int length_bits = 9;
 
 
         // Variables for the serialization

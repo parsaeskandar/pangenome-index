@@ -14,11 +14,72 @@ namespace panindexer {
     using offset_t = handlegraph::offset_t;
 
 
-    TagArray::TagArray() {
+//    TagArray::TagArray(int length_bits) : length_bits(length_bits) {
+//        encoded_runs = std::vector<gbwt::byte_type>();
+//        encoded_runs_starts = sdsl::bit_vector();
+//        bwt_intervals = sdsl::sd_vector<>();
+//    }
 
+
+    TagArray::TagArray() {
+    }
+
+    gbwt::size_type TagArray::encode_run_length(size_t offset, bool is_rev, uint16_t length, int64_t node_id){
+        gbwt::size_type encoded = (offset & 0x3FF) |  // 10 bits for offset
+                           ((is_rev & 0x1) << 10) | // 1 bit for reverse flag
+                           ((length & ((1LL << length_bits) - 1)) << 11) | // Dynamically allocated bits for length
+                           (static_cast<uint64_t>(node_id) << (11 + length_bits)); // Remaining bits for node ID
+
+        return encoded;
 
     }
 
+
+
+    std::pair<pos_t, uint16_t> TagArray::decode_run(gbwt::size_type encoded) {
+        size_t decoded_offset = encoded & 0x3FF; // Extract 10-bit offset
+        bool decoded_flag = (encoded >> 10) & 0x1; // Extract 1-bit reverse flag
+        uint16_t decoded_length = (encoded >> 11) & ((1LL << length_bits) - 1); // Extract length using dynamic bits
+        int64_t decoded_node_id = (encoded >> (11 + length_bits)); // Extract node ID
+
+
+        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
+        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
+
+        return result;
+    }
+
+
+    void TagArray::load_bptree_lite(BplusTree <Run> &bptree){
+        // have to iterate over the bptree and add the runs to the encoded_runs vector
+        for (auto it = bptree.begin(); it != bptree.end(); ++it) {
+            Run current_item = *it;
+            if (current_item.graph_position.value != 0) {
+                // we have an actual run with graph position
+                auto next_it = it;
+                ++next_it;
+                if (next_it != bptree.end()) {
+                    Run next_item = *next_it;
+                    // adding the pair (graph_value, length) as ByteCode to the encoded_runs vector
+                    pos_t current_pos = current_item.graph_position.decode();
+                    int total_length = next_item.start_position - current_item.start_position;
+                    int max_tag_len = 1 << length_bits;
+                    while (total_length >= max_tag_len){
+                        gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), max_tag_len - 1, id(current_pos));
+                        gbwt::ByteCode::write(encoded_runs, encoded);
+                        total_length -= (max_tag_len - 1);
+                    }
+
+                    if (total_length > 0){
+                        gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), total_length, id(current_pos));
+                        gbwt::ByteCode::write(encoded_runs, encoded);
+                    }
+
+
+                }
+            }
+        }
+    }
 
     void TagArray::load_bptree(BplusTree <Run> &bptree, size_t bwt_size) {
         // have to iterate over the bptree and add the runs to the encoded_runs vector and the bit-vectors
@@ -42,10 +103,12 @@ namespace panindexer {
 ////                            (gbwtgraph::offset(current_pos)) | (gbwtgraph::is_rev(current_pos) << 10) |
 ////                            ((next_item.start_position - current_item.start_position) << 11) |
 ////                            (gbwtgraph::id(current_pos) << 19);
-                    gbwt::size_type encoded =
-                            (gbwtgraph::offset(current_pos)) | (gbwtgraph::is_rev(current_pos) << 10) |
-                            ((next_item.start_position - current_item.start_position) << 11) |  // Now uses 9 bits
-                            (gbwtgraph::id(current_pos) << 20);  // Adjust the shift to 20 instead of 19
+//                    gbwt::size_type encoded =
+//                            (gbwtgraph::offset(current_pos)) | (gbwtgraph::is_rev(current_pos) << 10) |
+//                            ((next_item.start_position - current_item.start_position) << 11) |  // Now uses 10 bits
+//                            (gbwtgraph::id(current_pos) << 21);  // Adjust the shift to 21 instead of 20
+                    gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), next_item.start_position - current_item.start_position, id(current_pos));
+
 
                     encoded_runs_starts[encoded_runs.size()] = 1;
 
@@ -232,21 +295,24 @@ namespace panindexer {
 //            uint16_t decoded_length = (decc >> 11) & 0xFF;
 //            int64_t decoded_node_id = (decc >> 19);
 
-            size_t decoded_offset = decc & ((1LL << 10) - 1);
-            bool decoded_flag = (decc >> 10) & 0x1;
-            uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
-            int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
+            auto decoded = decode_run(decc);
 
-
-            // print
-            cerr << "Decoded offset: " << decoded_offset << endl;
-            cerr << "Decoded flag: " << decoded_flag << endl;
-            cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
-            cerr << "Decoded node ID: " << decoded_node_id << endl;
+//            size_t decoded_offset = decc & ((1LL << 10) - 1);
+//            bool decoded_flag = (decc >> 10) & 0x1;
+//            uint16_t decoded_length = (decc >> 11) & 0x3FF;  // Extract 10 bits (0x3FF = 1023)
+//            int64_t decoded_node_id = (decc >> 21);  // Adjust shift to match encoding
+//
+//
+//
+//            // print
+//            cerr << "Decoded offset: " << decoded_offset << endl;
+//            cerr << "Decoded flag: " << decoded_flag << endl;
+//            cerr << "Decoded length: " << static_cast<int>(decoded_length) << endl;
+//            cerr << "Decoded node ID: " << decoded_node_id << endl;
 
             number_of_runs--;
             unique_positions.insert(
-                    gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
+                    gbwtgraph::Position::encode(decoded.first).value);
         }
 
     }
@@ -282,22 +348,6 @@ namespace panindexer {
 
 
 
-    std::pair<pos_t, uint16_t> TagArray::decode_run(gbwt::size_type decc) {
-        size_t decoded_offset = decc & ((1LL << 10) - 1);
-        bool decoded_flag = (decc >> 10) & 0x1;
-        uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
-        int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
-
-
-        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
-        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
-
-        return result;
-    }
-
-
-
-    
 
 
     // Function to load a run starting from a specified position in the file and return the start of the next run
@@ -342,13 +392,18 @@ namespace panindexer {
         decc = gbwt::ByteCode::read(current_run, bit_location); // Decode at bit location
 
         // Extract values from the decoded byte
-        size_t decoded_offset = decc & ((1LL << 10) - 1);
-        bool decoded_flag = (decc >> 10) & 0x1;
-        uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
-        int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
+//        size_t decoded_offset = decc & ((1LL << 10) - 1);
+//        bool decoded_flag = (decc >> 10) & 0x1;
+//        uint16_t decoded_length = (decc >> 11) & 0x3FF;  // Extract 10 bits (0x3FF = 1023)
+//        int64_t decoded_node_id = (decc >> 21);  // Adjust shift to match encoding
 
-        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
-        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
+        auto result = decode_run(decc);
+
+
+//        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
+//        std::pair<pos_t, uint16_t> result = std::make_pair(graph_pos, decoded_length);
+
+
 
 
 //         Output the decoded information for debugging
@@ -433,30 +488,70 @@ namespace panindexer {
     void TagArray::compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs){
         std::vector<gbwt::byte_type> encoded_runs;
         if (tag_runs.size() > 0) {
-            for (const auto& [value, run_length] : tag_runs) {
-//                std::cerr << value << " " << (int) run_length << std::endl;
+            for (auto [value, run_length] : tag_runs) {
 
-                // keeping the data for creating the bwt_intervals
-                bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
-                this->cumulative_run_bwt_position += run_length;
+                int max_tag_len = 1 << length_bits;
+                // have to write run_length/(max_tag_len - 1) of the run (value, max_tag_len)
+
+                while (run_length >= max_tag_len){
+
+                    bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
+                    this->cumulative_run_bwt_position += (max_tag_len - 1);
 
 
-                // keeping the data for creating the encoded starts
-                if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
-                    this->start_pos = this->cumulative_starts + encoded_runs.size();
-                    // write the encoded start in file
-                    encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
-                    this->encoded_start_ones++;
+                    // keeping the data for creating the encoded starts
+                    if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
+                        this->start_pos = this->cumulative_starts + encoded_runs.size();
+                        // write the encoded start in file
+                        encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
+                        this->encoded_start_ones++;
+                    }
+
+//                gbwt::size_type encoded =
+//                        (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
+//                        (run_length << 11) |  // Now uses 10 bits
+//                        (gbwtgraph::id(value) << 21);  // Adjust the shift to 21 instead of 20
+
+
+                    gbwt::size_type encoded = encode_run_length(offset(value), is_rev(value), (max_tag_len - 1), id(value));
+
+
+                    gbwt::ByteCode::write(encoded_runs, encoded);
+
+                    this->remaining_run_to_write_start++;
+
+                    run_length -= (max_tag_len - 1);
+
                 }
 
-                gbwt::size_type encoded =
-                        (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
-                        (run_length << 11) |
-                        (gbwtgraph::id(value) << 20);
+                if (run_length > 0){
+                    bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
+                    this->cumulative_run_bwt_position += run_length;
 
-                gbwt::ByteCode::write(encoded_runs, encoded);
 
-                this->remaining_run_to_write_start++;
+                    // keeping the data for creating the encoded starts
+                    if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
+                        this->start_pos = this->cumulative_starts + encoded_runs.size();
+                        // write the encoded start in file
+                        encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
+                        this->encoded_start_ones++;
+                    }
+
+//                gbwt::size_type encoded =
+//                        (gbwtgraph::offset(value)) | (gbwtgraph::is_rev(value) << 10) |
+//                        (run_length << 11) |  // Now uses 10 bits
+//                        (gbwtgraph::id(value) << 21);  // Adjust the shift to 21 instead of 20
+
+
+                    gbwt::size_type encoded = encode_run_length(offset(value), is_rev(value), run_length, id(value));
+
+
+                    gbwt::ByteCode::write(encoded_runs, encoded);
+
+                    this->remaining_run_to_write_start++;
+
+                }
+
             }
 
             size_t size = encoded_runs.size();
@@ -547,11 +642,12 @@ namespace panindexer {
             // the read function changes the bit_location to the next bit location
             decc = gbwt::ByteCode::read(this->encoded_runs, bit_location);
 
-            size_t decoded_offset = decc & ((1LL << 10) - 1);
-            bool decoded_flag = (decc >> 10) & 0x1;
-            uint16_t decoded_length = (decc >> 11) & 0x1FF;  // Extract 9 bits
-            int64_t decoded_node_id = (decc >> 20);  // Adjust the shift to match encoding
+//            size_t decoded_offset = decc & ((1LL << 10) - 1);
+//            bool decoded_flag = (decc >> 10) & 0x1;
+//            uint16_t decoded_length = (decc >> 11) & 0x3FF;  // Extract 10 bits (0x3FF = 1023)
+//            int64_t decoded_node_id = (decc >> 21);  // Adjust shift to match encoding
 
+            auto decoded = decode_run(decc);
             // print
 //            cerr << "Decoded offset: " << decoded_offset << endl;
 //            cerr << "Decoded flag: " << decoded_flag << endl;
@@ -559,7 +655,7 @@ namespace panindexer {
 //            cerr << "Decoded node ID: " << decoded_node_id << endl;
 
             run_nums--;
-            unique_positions.push_back(gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
+            unique_positions.push_back(gbwtgraph::Position::encode(decoded.first).value);
 //            unique_positions.insert(
 //                    gbwtgraph::Position::encode(pos_t(decoded_node_id, decoded_offset, decoded_flag)).value);
         }

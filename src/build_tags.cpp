@@ -39,6 +39,7 @@ int main(int argc, char **argv) {
     std::string rlbwt_file = std::string(argv[2]);
     std::string output_file = std::string(argv[3]);
 
+
     int threads = 16;
 //    omp_set_num_threads(threads);
     size_t k = 31;
@@ -250,6 +251,8 @@ int main(int argc, char **argv) {
     cerr << "The final number of items in the BPlusTree is: " << bptree.get_bpt_size() << endl;
     tag_arrays_covered = 0;
 
+
+    int max_tag_run_length = 32;
     cerr << "calculating the fraction of the tag arrays covered " << endl;
     // calculating the fraction of the tag arrays covered
     int count = 0;
@@ -261,6 +264,10 @@ int main(int argc, char **argv) {
             if (next_it != bptree.end()) { // Check if the next element is not the end
                 panindexer::Run next_item = *next_it; // Get the next item
                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
+                // change the max_tag_run_length if the tag_arrays_covered is bigger that it
+                if (next_item.start_position - current_item.start_position > max_tag_run_length){
+                    max_tag_run_length = next_item.start_position - current_item.start_position;
+                }
                 count++;
                 // print the decoded items of current_item and next item
                 if (count < 5) {
@@ -313,8 +320,12 @@ int main(int argc, char **argv) {
          << bwt_size << " = "
          << (double) tag_arrays_covered / bwt_size << endl;
 
+
+    cerr << "The maximum tag run length is: " << max_tag_run_length << endl;
+    int run_length_bit = ceil(log2(max_tag_run_length));
+    cerr << "The number of bits required for the maximum tag run length is: " << run_length_bit << endl;
     panindexer::TagArray tag_array;
-    tag_array.load_bptree(bptree, idx.bwt_size());
+    tag_array.load_bptree_lite(bptree);
 
     cerr << "The bptree loaded into Tag array DS correctly " << endl;
 

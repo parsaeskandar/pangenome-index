@@ -53,7 +53,7 @@ LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o)
 LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags merge_tags build_rindex)
+PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags merge_tags build_rindex tags_check)
 
 
 .PHONY: all clean directories test

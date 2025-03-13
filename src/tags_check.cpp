@@ -394,7 +394,6 @@ int main(int argc, char **argv) {
 
 
 
-    // TODO: make this multithreaded
     // get the first node of each path and get the component id of the node
 #pragma omp parallel for
     for (size_t i = 0; i < total_strings; i++) {
