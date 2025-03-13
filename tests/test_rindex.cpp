@@ -166,7 +166,7 @@ namespace {
 
             int i = 0;
             while (r_char != NENDMARKER && fm_char != NENDMARKER){
-                std::cerr << i << " " << start_fm << " " << start_r << std::endl;
+//                std::cerr << i << " " << start_fm << " " << start_r << std::endl;
                 ASSERT_EQ(fm_char, r_char) << "Invalid LF results from the FM-index and the r-index";
                 ASSERT_EQ(start_fm, start_r) << "Invalid LF results from the FM-index and the r-index";
                 a = index.lf(start_fm);
