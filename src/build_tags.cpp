@@ -2,7 +2,6 @@
 // Created by seeskand on 9/13/24.
 //
 
-#include "../r-index/internal/r_index.hpp"
 #include "pangenome_index/bplus_tree.hpp"
 #include "pangenome_index/algorithm.hpp"
 #include "pangenome_index/tag_arrays.hpp"
@@ -25,7 +24,6 @@
 #endif
 
 using namespace std;
-using namespace ri;
 using namespace panindexer;
 
 
@@ -283,7 +281,7 @@ int main(int argc, char **argv) {
 //                }
             }
         } else {
-            std::cerr << "================ERROR================ " << count << std::endl;
+            std::cerr << "================================ " << count << std::endl;
             // this case should not happen other than when we are at the end
             pos_t t1 = current_item.graph_position.decode();
             cerr << "The current item is: " << current_item << endl;

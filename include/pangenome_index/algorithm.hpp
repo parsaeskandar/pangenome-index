@@ -12,7 +12,6 @@
 #include <condition_variable>
 #include <omp.h>
 #include <hash_map.hpp>
-#include "../r-index/internal/r_index.hpp"
 #include "bplus_tree.hpp"
 #include "gbwtgraph/gbz.h"
 #include <hash_map.hpp>
@@ -25,7 +24,6 @@
 
 
 using namespace std;
-using namespace ri;
 using namespace gbwtgraph;
 
 
@@ -128,7 +126,7 @@ namespace panindexer {
 
 
 
-void kmers_to_bplustree_worker(FastLocate &idx, std::vector<std::pair<Run, size_t>> &queue,
+void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair<Run, size_t>> &queue,
                                    hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
                                    size_t k, gbwt::range_type interval, const string &current_kmer) {
 
@@ -144,7 +142,7 @@ void kmers_to_bplustree_worker(FastLocate &idx, std::vector<std::pair<Run, size_
 
             Run run = {interval.first, it->second};
 
-            queue.push_back({run, interval.second - interval.first + 1});
+            queue.push({run, interval.second - interval.first + 1});
 
 //            queue.push( {run, interval.second - interval.first + 1});
         }
@@ -165,7 +163,8 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
     int threads = omp_get_max_threads();
     // Thread-safe queue to collect results
     ThreadSafeQueue <std::pair<Run, size_t>> queue;
-    std::vector<std::vector<std::pair<Run, size_t>>> batches(threads);
+//    std::vector<std::vector<std::pair<Run, size_t>>> batches(threads);
+    std::atomic<bool> done(false);
 
     // number of threads
 
@@ -176,46 +175,50 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
 
     std::cerr << "running each part " << part_size << " using threads " << threads << std::endl;
 
-    std::vector<string> starting_kmers = {"A", "C", "G", "T"};
+    std::thread consumer([&]() {
+        std::pair<Run, size_t> item;
+        while (!done || !queue.empty()) {
+            if (queue.try_pop(item)) {
+                bptree.insert(item.first, item.second); // Insert immediately
+            } else {
+                std::this_thread::yield(); // Prevents busy-waiting
+            }
+        }
+    });
 #pragma omp parallel for
     for (int i = 0; i < threads; i++) {
         size_t start = i * part_size;
         size_t end = (i + 1) * part_size - 1;
         if (i == threads - 1) {
-            end = idx.bwt_size() - 1; // TODO: CHECK
-//            end = idx.bwt_size() - 1;
+            end = idx.bwt_size() - 1;
         }
 
-        batches[i].reserve(end - start);
-        kmers_to_bplustree_worker(idx, batches[i], index, k, {start, end}, "");
+//        batches[i].reserve(end - start);
+        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
 //        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
     }
 
+    done = true;
+    consumer.join();
 
 
 
 
-    // Single-threaded insertion into BPlusTree
-//    std::pair <Run, size_t> result;
-    std::vector<std::pair<Run, size_t>> merged;
-    for (const auto &batch : batches) {
-        merged.insert(merged.end(), batch.begin(), batch.end());
-    }
-
-    // Step 2: Sort based on Run.start_position
-//    std::sort(merged.begin(), merged.end(), [](const auto &a, const auto &b) {
-//        return a.first.start_position < b.first.start_position;
-//    });
-
-    std::cerr << "finished calculating the intervals with size " << merged.size() << std::endl;
 
 
-    for (const auto &item: merged){
-        bptree.insert(item.first, item.second);
-    }
-//    while (queue.try_pop(result)) {
-//        bptree.insert(result.first, result.second);
+//    std::vector<std::pair<Run, size_t>> merged;
+//    for (const auto &batch : batches) {
+//        merged.insert(merged.end(), batch.begin(), batch.end());
 //    }
+//
+//
+//    std::cerr << "finished calculating the intervals with size " << merged.size() << std::endl;
+//
+//
+//    for (const auto &item: merged){
+//        bptree.insert(item.first, item.second);
+//    }
+
 }
 
 vector <pair<Run, size_t>>
@@ -266,7 +269,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                 handle_t current_handle = graph.get_handle(id(current_pos), false);
 
                 // The BWT interval of the current kmer
-                range_t current_interval = {current_starting_pos, interval_end - 1};
+                gbwt::range_type current_interval = {current_starting_pos, interval_end - 1};
 
                 if (!is_rev(current_pos)) {
                     if (offset(current_pos) > 0) {
