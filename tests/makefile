@@ -51,7 +51,7 @@ HEADERS=$(wildcard ../include/pangenome_index/*.hpp)
 #LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-PROGRAMS=test_rindex
+PROGRAMS=$(addprefix $(PWD)/,test_rindex test_bplus_tree)
 
 LIBRARY=../lib/libpanindexer.a
 

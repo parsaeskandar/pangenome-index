@@ -65,68 +65,69 @@ namespace panindexer {
 //        return true;
 //    }
 
-    template<typename T>
-    class ThreadSafeQueue {
-    public:
-        // Push item to the queue
-        void push(const T &item) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            queue_.push(item);
-            cond_var_.notify_one();  // Notify while holding the lock
-        }
+template<typename T>
+class ThreadSafeQueue {
+public:
+    // Push item to the queue
+    void push(const T &item) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        queue_.push(item);
+        cond_var_.notify_one();  // Notify while holding the lock
+    }
 
-        // Try to pop an item (non-blocking)
-        bool try_pop(T &item) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            if (queue_.empty()) {
-                return false;
-            }
-            item = std::move(queue_.front());
-            queue_.pop();
-            return true;
+    // Try to pop an item (non-blocking)
+    bool try_pop(T &item) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        if (queue_.empty()) {
+            return false;
         }
+        item = std::move(queue_.front());
+        queue_.pop();
+        return true;
+    }
 
-        // Blocking pop (waits until an item is available)
-        void wait_and_pop(T &item) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            cond_var_.wait(lock, [this]() { return !queue_.empty(); }); // Wait until not empty
-            item = std::move(queue_.front());
-            queue_.pop();
-        }
+    // Blocking pop (waits until an item is available)
+    void wait_and_pop(T &item) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cond_var_.wait(lock, [this]() { return !queue_.empty(); }); // Wait until not empty
+        item = std::move(queue_.front());
+        queue_.pop();
+    }
 
-        // Check if the queue is empty (thread-safe)
-        bool empty() {
-            std::unique_lock<std::mutex> lock(mutex_);
-            return queue_.empty();
-        }
+    // Check if the queue is empty (thread-safe)
+    bool empty() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return queue_.empty();
+    }
 
-        size_t size() {
-            std::unique_lock<std::mutex> lock(mutex_);
-            return queue_.size();
-        }
+    size_t size() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return queue_.size();
+    }
 
-    private:
-        std::queue<T> queue_;
-        std::mutex mutex_;
-        std::condition_variable cond_var_;
-    };
+private:
+    std::queue<T> queue_;
+    std::mutex mutex_;
+    std::condition_variable cond_var_;
+};
 
 // This function input is the OCC vector of the end of the sequences and it returns the sorted end_of_seq vector
 // which is the sorted vector of pairs (i, SA[i]) for the end of each sequence which is (ISA[j], j)
-    vector <pair<uint64_t, uint64_t>> sort_end_of_seq(vector <pair<uint64_t, uint64_t>> &OCC) {
+vector <pair<uint64_t, uint64_t>> sort_end_of_seq(vector <pair<uint64_t, uint64_t>> &OCC) {
 
-        // Sort the end_of_seq vector by the second element of each pair
-        sort(OCC.begin(), OCC.end(),
-             [](const pair <uint64_t, uint64_t> &a, const pair <uint64_t, uint64_t> &b) {
-                 return a.second < b.second;
-             });
+    // Sort the end_of_seq vector by the second element of each pair
+    sort(OCC.begin(), OCC.end(),
+         [](const pair <uint64_t, uint64_t> &a, const pair <uint64_t, uint64_t> &b) {
+             return a.second < b.second;
+         });
 
-        return OCC;
-    }
+    return OCC;
+}
 
 
 
-void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair<Run, size_t>> &queue,
+
+void kmers_to_bplustree_worker(FastLocate &idx, std::vector<std::pair<Run, size_t>> &queue,
                                    hash_map <gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
                                    size_t k, gbwt::range_type interval, const string &current_kmer) {
 
@@ -142,7 +143,7 @@ void kmers_to_bplustree_worker(FastLocate &idx, ThreadSafeQueue<std::pair<Run, s
 
             Run run = {interval.first, it->second};
 
-            queue.push({run, interval.second - interval.first + 1});
+            queue.push_back({run, interval.second - interval.first + 1});
 
 //            queue.push( {run, interval.second - interval.first + 1});
         }
@@ -162,9 +163,8 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
 
     int threads = omp_get_max_threads();
     // Thread-safe queue to collect results
-    ThreadSafeQueue <std::pair<Run, size_t>> queue;
-//    std::vector<std::vector<std::pair<Run, size_t>>> batches(threads);
-    std::atomic<bool> done(false);
+//    ThreadSafeQueue <std::pair<Run, size_t>> queue;
+    std::vector<std::vector<std::pair<Run, size_t>>> batches(threads);
 
     // number of threads
 
@@ -175,16 +175,7 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
 
     std::cerr << "running each part " << part_size << " using threads " << threads << std::endl;
 
-    std::thread consumer([&]() {
-        std::pair<Run, size_t> item;
-        while (!done || !queue.empty()) {
-            if (queue.try_pop(item)) {
-                bptree.insert(item.first, item.second); // Insert immediately
-            } else {
-                std::this_thread::yield(); // Prevents busy-waiting
-            }
-        }
-    });
+    std::vector<string> starting_kmers = {"A", "C", "G", "T"};
 #pragma omp parallel for
     for (int i = 0; i < threads; i++) {
         size_t start = i * part_size;
@@ -193,33 +184,127 @@ void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree <Run> &bptree,
             end = idx.bwt_size() - 1;
         }
 
-//        batches[i].reserve(end - start);
-        kmers_to_bplustree_worker(idx, queue, index, k, {start, end}, "");
+        batches[i].reserve(end - start);
+        kmers_to_bplustree_worker(idx, batches[i], index, k, {start, end}, "");
 //        kmers_to_bplustree_worker(idx, queue, index, k, interval, starting_kmers[i]);
     }
 
-    done = true;
-    consumer.join();
 
 
 
 
-
-
+    // Single-threaded insertion into BPlusTree
+//    std::pair <Run, size_t> result;
 //    std::vector<std::pair<Run, size_t>> merged;
 //    for (const auto &batch : batches) {
 //        merged.insert(merged.end(), batch.begin(), batch.end());
 //    }
-//
-//
+
+    // Step 2: Sort based on Run.start_position
+//    std::sort(merged.begin(), merged.end(), [](const auto &a, const auto &b) {
+//        return a.first.start_position < b.first.start_position;
+//    });
+
 //    std::cerr << "finished calculating the intervals with size " << merged.size() << std::endl;
-//
-//
+
+
+    for (const auto &batch : batches) {
+        for (const auto &item : batch) {
+            bptree.insert(item.first, item.second);
+        }
+    }
 //    for (const auto &item: merged){
 //        bptree.insert(item.first, item.second);
 //    }
-
+//    while (queue.try_pop(result)) {
+//        bptree.insert(result.first, result.second);
+//    }
 }
+
+
+
+
+
+
+
+
+//void iterative_kmers_to_bplustree(FastLocate &idx, ThreadSafeQueue<std::pair<Run, size_t>> &queue,
+//                                  hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
+//                                  size_t k, gbwt::range_type interval) {
+//
+//    struct KmerState {
+//        std::string kmer;
+//        gbwt::range_type range;
+//    };
+//
+//    std::queue<KmerState> bfs_queue;
+//
+//    // Start BFS with single character k-mers
+//    for (char base : {'A', 'C', 'G', 'T'}) {
+//        gbwt::range_type new_range = idx.LF(interval, base);
+//        if (new_range.first <= new_range.second) {
+//            bfs_queue.push({std::string(1, base), new_range});
+//        }
+//    }
+//
+//    while (!bfs_queue.empty()) {
+//        KmerState current = bfs_queue.front();
+//        bfs_queue.pop();
+//
+//        if (current.kmer.length() == k) {
+//            // Encode k-mer and check index
+//            gbwtgraph::Key64 kmer_key = gbwtgraph::Key64::encode(current.kmer);
+//            auto it = index.find(kmer_key.get_key());
+//            if (it != index.end()) {
+//                Run run = {current.range.first, it->second};
+//                queue.push({run, current.range.second - current.range.first + 1});
+//            }
+//            continue; // Do not expand this k-mer further
+//        }
+//
+//        // Expand to next character
+//        for (char base : {'A', 'C', 'G', 'T'}) {
+//            gbwt::range_type new_range = idx.LF(current.range, base);
+//            if (new_range.first <= new_range.second) {
+//                bfs_queue.push({base + current.kmer, new_range});
+//            }
+//        }
+//    }
+//}
+//
+//void parallel_kmers_to_bplustree(FastLocate &idx, BplusTree<Run> &bptree,
+//                                 hash_map<gbwtgraph::Key64::value_type, gbwtgraph::Position> &index,
+//                                 size_t k, gbwt::range_type interval) {
+//    int threads = omp_get_max_threads();
+//    ThreadSafeQueue<std::pair<Run, size_t>> queue;
+//    std::atomic<bool> done(false);
+//
+//    // Start consumer thread (keeps queue small)
+//    std::thread consumer([&]() {
+//        std::pair<Run, size_t> item;
+//        while (!done || !queue.empty()) {
+//            if (queue.try_pop(item)) {
+//                bptree.insert(item.first, item.second);
+//            } else {
+//                std::this_thread::yield(); // Avoid busy waiting
+//            }
+//        }
+//    });
+//
+//    // Process BFS expansion in parallel
+//#pragma omp parallel for
+//    for (int i = 0; i < threads; i++) {
+//        size_t part_size = idx.bwt_size() / threads;
+//        size_t start = i * part_size;
+//        size_t end = (i == threads - 1) ? (idx.bwt_size() - 1) : ((i + 1) * part_size - 1);
+//        iterative_kmers_to_bplustree(idx, queue, index, k, {start, end});
+//    }
+//
+//    // Ensure all worker threads have finished
+//    done = true;
+//    consumer.join();
+//}
+
 
 vector <pair<Run, size_t>>
 extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bptree, int batch_size) {
@@ -443,7 +528,7 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
 
     // **Sorting before insertion (if needed)**
-    std::sort(tmp1.begin(), tmp1.end());
+//    std::sort(tmp1.begin(), tmp1.end());
 
     std::cerr << "Adding " << tmp1.size() << " runs with size 1 to the BPlusTree" << std::endl;
 

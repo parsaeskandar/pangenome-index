@@ -468,7 +468,7 @@ namespace panindexer {
                 }
             }
 
-            if (inserted_index < 1) {
+            if (inserted_index < 1 ) {
                 if (prev != nullptr) {
                     bool res_prev = merge_item_prev(new_items);
                     if (!res_prev) {
@@ -503,9 +503,10 @@ namespace panindexer {
                 return new_items;
             }
 
-//        if (DEEBUG) cout << "OOOOOO" << inserted_index << " " << new_items.size() << endl;
+
+//            cout << "OOOOOO" << inserted_index << " " << new_items.size() << endl;
             // if the new item is added at the end of the node
-            if (inserted_index >= new_items.size()) {
+            if ((inserted_index >= new_items.size() || inserted_index == 0) && new_items.size() > 0) {
                 if (next != nullptr) {
                     bool res = merge_item_next(new_items);
                     if (!res) {
@@ -517,7 +518,7 @@ namespace panindexer {
                 }
             }
 
-            if (inserted_index < 1) {
+            if (inserted_index <= 1 && new_items.size() > 0) {
                 if (prev != nullptr) {
 
                     bool res_prev = merge_item_prev(new_items);
@@ -653,7 +654,7 @@ namespace panindexer {
             // first case is when the new_run doesn't hit previous run or the next run
             if ((index == 0 || new_run.start_position > new_items[index - 1].start_position) &&
                 (index == len || new_run.start_position + run_length < new_items[index].start_position)) {
-//            if (DEEBUG) std::cout << "insert run case 1" << std::endl;
+//                std::cout << "insert run case 1" << std::endl;
                 if (index == 0) {
                     new_items.insert(new_items.begin(), new_run);
                     new_items.insert(new_items.begin() + 1, create_gap(new_run.start_position + run_length));
@@ -676,7 +677,7 @@ namespace panindexer {
                 // second case is when we hit the previous run end point and not the next run starting point
             else if (index != 0 && new_run.start_position == new_items[index - 1].start_position &&
                      ((index == len || new_run.start_position + run_length < new_items[index].start_position))) {
-//            if (DEEBUG) std::cout << "insert run case 2" << std::endl;
+//                std::cout << "insert run case 2" << std::endl;
                 // the case that index = 1
                 if (index == 1) {
                     // if adding after a gap run
@@ -721,7 +722,7 @@ namespace panindexer {
                 // third case, when we hit the next run starting point but not the previous one
             else if ((index == 0 || new_run.start_position > new_items[index - 1].start_position) && index != len &&
                      new_run.start_position + run_length == new_items[index].start_position) {
-//            if (DEEBUG) std::cout << "insert run case 3" << std::endl;
+//                std::cout << "insert run case 3" << std::endl;
                 // two cases here, first being the new run graph_position not be the same as the next run graph_position
                 if (new_run.graph_position.value != new_items[index].graph_position.value) {
 //                if (DEEBUG) std::cout << "insert run case 3.1" << std::endl;
@@ -841,7 +842,7 @@ namespace panindexer {
 
 
         bool merge_item_next(vector <T> &new_items) {
-//        if (DEEBUG) cout << "merging with the next node" << endl;
+//            cout << "merging with the next node" << endl;
             assert(next != nullptr);
             vector <T> next_node_items = next->get_items();
 
@@ -873,7 +874,7 @@ namespace panindexer {
         bool merge_item_prev(vector <T> &new_items) {
             assert(prev != nullptr);
             assert(!new_items.empty());
-//        if (DEEBUG) cout << "merging with the prev node" << endl;
+//            cout << "merging with the prev node" << endl;
             vector <T> prev_node_items = prev->get_items();
 
 //            std::cerr << new_items[0] << " " <<  prev_node_items[prev_node_items.size() - 1] << endl;
@@ -1028,8 +1029,17 @@ namespace panindexer {
 //            std::cerr << "The child that we are removing is " << endl;
 //            parent->get_child(index)->print();
             // Remove the item and the corresponding child from the parent
-            parent->remove_item(index - 1);
+
+//            std::cerr << "index " << index << endl;
+
+            if (index == 0) {
+                parent->remove_item(0);
+            } else {
+                parent->remove_item(index - 1);
+            }
             parent->remove_child(index);
+
+
 
 //            std::cerr << "PARENT AFTER REMOVING size " << parent->get_children().size() << endl;
 //            parent->print();
@@ -1077,7 +1087,7 @@ namespace panindexer {
 
         // This function handles the underflow of a non-leaf (parent) node.
         void handle_parent_underflow(bpNode<T> *node) {
-//        if (DEEBUG) cout << "handling parent underflow" << endl;
+//            cout << "handling parent underflow" << endl;
 
             assert(!node->is_leaf());
 
@@ -1443,6 +1453,42 @@ namespace panindexer {
                     return success;
                 }
 
+
+                // in this case we want to completely remove this node from the tree
+                if (inserted_items.size() == 0){
+
+//                    std::cerr << "There is a completely removed node" << endl;
+
+//                    auto *next1 = leaf->get_next();
+//                    if (next1 != nullptr){
+//                        leaf_underflow(next1);
+//                    }
+//                    leaf->replace_items_leaf(inserted_items);
+//                    leaf_underflow(leaf);
+
+
+
+
+
+                    if (leaf->get_next() != nullptr) {
+                        leaf->get_next()->set_prev(leaf->get_prev());
+                    }
+
+                    assert(leaf->get_next()->get_prev() == leaf);
+
+
+                    if (leaf->get_prev() != nullptr) {
+                        leaf->get_prev()->set_next(leaf->get_next());
+                    }
+                    assert(leaf->get_prev()->get_next() == leaf);
+                    remove_from_parent(leaf);
+
+                    delete leaf;
+
+                    return success;
+
+                }
+
 //                if (leaf->get_next() != nullptr && leaf->get_next()->is_underflowing()){
 //                    std::cerr << "Next NODE IS UNDERFLOWING AFTER INSERT SUCCESS" << std::endl;
 //                }
@@ -1452,9 +1498,9 @@ namespace panindexer {
                 // print the items in inserted_items
 //            if (DEEBUG) for (auto &item: inserted_items) { cout << "item: " << item << endl; }
 
-                if (inserted_items.size() <= degree) {
+                if (inserted_items.size() > 0 && inserted_items.size() <= degree) {
                     leaf->replace_items_leaf(inserted_items);
-                } else {
+                } else if (inserted_items.size() > 0){
 //                    if (leaf->get_next() != nullptr && leaf->get_next()->is_underflowing()){
 //                        std::cerr << "((((((((((FURST)))))))))))" << endl;
 //                        int index = leaf->get_next()->find_index_in_parent();
@@ -1606,6 +1652,31 @@ namespace panindexer {
                     }
                 }
             }
+        }
+
+        void print_tree(bpNode<Run> *node, int level = 0) {
+            if (node == nullptr) return;
+
+            // Indent to represent tree level
+            std::string indent(level * 4, ' ');
+
+            // Label the node
+            std::cout << indent << (node->is_leaf() ? "Leaf: " : "Internal: ");
+            for (int i = 0; i < node->get_size(); ++i) {
+                std::cout << "[" << node->get_item(i).start_position << ":"
+                          << node->get_item(i).graph_position.value << "] ";
+            }
+            std::cout << (node->is_root() ? "(root)" : "") << "\n";
+
+            if (!node->is_leaf()) {
+                for (int i = 0; i <= node->get_size(); ++i) {
+                    print_tree(node->get_child(i), level + 1);
+                }
+            }
+        }
+
+        void print_whole_tree() {
+            print_tree(root);
         }
 
         void print_whole() {
