@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    BplusTree<panindexer::Run> bptree(15); // TODO: determine the BPlusTree degree
+    BplusTree<panindexer::Run> bptree(32); // TODO: determine the BPlusTree degree
 
 //
 //
@@ -149,6 +149,8 @@ int main(int argc, char **argv) {
 
     // computing some statistics
     auto unique_kmers_size = index.size();
+    index.clear();
+    index.rehash(0);
     auto bptree_items = bptree.get_bpt_size();
     auto bwt_size = idx.bwt_size();
     size_t tag_arrays_covered = 0;
@@ -323,20 +325,14 @@ int main(int argc, char **argv) {
     int run_length_bit = ceil(log2(max_tag_run_length));
     cerr << "The number of bits required for the maximum tag run length is: " << run_length_bit << endl;
     panindexer::TagArray tag_array;
-    tag_array.load_bptree_lite(bptree);
+//    tag_array.load_bptree_lite(bptree);
+    tag_array.serialize_bptree_lite(output_file, bptree);
 
-    cerr << "The bptree loaded into Tag array DS correctly " << endl;
+    cerr << "The bptree serialized into Tag array DS correctly " << endl;
 
-//    auto node_to_comp = node_to_component(gbz);
 
-    
 
-    // query the tag array and print the first 10 runs
-//    tag_array.query(0, 100);
-
-//    tag_array.serialize(std::cout);
-//    tag_array.store_blocks(std::cout);
-    tag_array.store_blocks_sdsl(output_file);
+//    tag_array.store_blocks_sdsl(output_file);
 
 
 

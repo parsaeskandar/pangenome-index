@@ -81,6 +81,47 @@ namespace panindexer {
         }
     }
 
+    void TagArray::serialize_bptree_lite(std::string filename, BplusTree <Run> &bptree){
+
+        sdsl::int_vector_buffer<8> out(filename, std::ios::out | std::ios::trunc);
+
+        // have to iterate over the bptree and add the runs to the encoded_runs vector
+        for (auto it = bptree.begin(); it != bptree.end(); ++it) {
+            std::vector<gbwt::byte_type> encoded_runs_temp;
+            Run current_item = *it;
+            if (current_item.graph_position.value != 0) {
+                // we have an actual run with graph position
+                auto next_it = it;
+                ++next_it;
+                if (next_it != bptree.end()) {
+                    Run next_item = *next_it;
+                    // adding the pair (graph_value, length) as ByteCode to the encoded_runs vector
+                    pos_t current_pos = current_item.graph_position.decode();
+                    int total_length = next_item.start_position - current_item.start_position;
+                    int max_tag_len = 1 << length_bits;
+                    while (total_length >= max_tag_len){
+                        gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), max_tag_len - 1, id(current_pos));
+                        gbwt::ByteCode::write(out, encoded);
+//                        out.push_back(encoded);
+                        total_length -= (max_tag_len - 1);
+                    }
+
+                    if (total_length > 0){
+                        gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), total_length, id(current_pos));
+//                        out.push_back(encoded);
+                        gbwt::ByteCode::write(out, encoded);
+                    }
+
+                    // serialize the encoded_runs_temp
+//                    main_out.write(reinterpret_cast<const char *>(encoded_runs.data()), size * sizeof(gbwt::byte_type));
+
+
+                }
+            }
+        }
+
+    }
+
     void TagArray::load_bptree(BplusTree <Run> &bptree, size_t bwt_size) {
         // have to iterate over the bptree and add the runs to the encoded_runs vector and the bit-vectors
         auto number_of_runs = bptree.get_bpt_run_count();

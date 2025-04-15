@@ -516,29 +516,142 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
     }
 
     cerr << "The traverse completed" << endl;
+    std::cerr << "Adding runs with size 1 to the BPlusTree" << std::endl;
 
     // Merge all thread-local results into `tmp1` (single-threaded step)
     for (auto& local_tmp : thread_tmp) {
-//        for (auto &i : local_tmp) {
-//            bptree.insert(i, 1);
-//        }
-        tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
+        for (auto &i : local_tmp) {
+            bptree.insert(i, 1);
+        }
+//        tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
     }
 
-
-
-    // **Sorting before insertion (if needed)**
-//    std::sort(tmp1.begin(), tmp1.end());
-
-    std::cerr << "Adding " << tmp1.size() << " runs with size 1 to the BPlusTree" << std::endl;
-
-
-    for (auto &i : tmp1) {
-        bptree.insert(i, 1);
-    }
 
     omp_destroy_lock(&lock);
 }
+
+
+//#include <omp.h>
+//#include <vector>
+//#include <queue>
+//#include <thread>
+//#include <mutex>
+//#include <condition_variable>
+//
+//    void traverse_sequences_parallel(GBZ &gbz, BplusTree<Run> &bptree, FastLocate &idx,
+//                                     std::vector<std::pair<uint64_t, uint64_t>> &end_of_seq,
+//                                     size_t batch_size = 10000) {
+//        auto number_of_sequences = end_of_seq.size();
+//        int num_threads = omp_get_max_threads();
+//
+//        std::queue<std::vector<Run>> insertion_queue;
+//        std::mutex queue_mutex;
+//        std::condition_variable queue_cv;
+//        bool done = false;
+//        int i = 0;
+//
+//        // Consumer thread: single writer to the B+ tree
+//        std::thread inserter([&]() {
+//            while (true) {
+//                std::vector<Run> batch;
+//
+//                {
+//                    std::unique_lock<std::mutex> lock(queue_mutex);
+//                    queue_cv.wait(lock, [&]() { return !insertion_queue.empty() || done; });
+//
+//                    if (!insertion_queue.empty()) {
+//                        batch = std::move(insertion_queue.front());
+//                        insertion_queue.pop();
+//                    } else if (done) {
+//                        break;
+//                    }
+//                }
+//
+//
+////                std::cerr << "Inserting into bptree" << batch.size() << std::endl;
+//                i++;
+//                if (i % 1000 == 0){
+//                    std::cerr << "Inserting into bptree " << i << " with batch size " << batch.size() << std::endl;
+//                }
+//                for (const auto &run : batch) {
+//                    bptree.insert(run, 1);
+//                }
+//            }
+//        });
+//
+//        // Parallel traversal
+//#pragma omp parallel
+//        {
+//            std::vector<Run> local_tmp;
+//            int thread_id = omp_get_thread_num();
+//
+//#pragma omp for schedule(dynamic)
+//            for (int seq_num = 0; seq_num < number_of_sequences; ++seq_num) {
+//                auto seq_graph_nodes = gbz.index.extract(seq_num * 2);
+//                auto bwt_index = end_of_seq[seq_num].first;
+//
+//                auto current_nodes_index = seq_graph_nodes.size() - 1;
+//                auto current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+//                auto in_node_index = gbz.graph.get_length(current_node) - 1;
+//
+//                while (true) {
+//                    auto temp = idx.psi(bwt_index);
+//                    bwt_index = temp.second;
+//                    auto first = temp.first;
+//
+//                    if (first == NENDMARKER) break;
+//
+//                    if (in_node_index == -1) {
+//                        if (current_nodes_index == 0) break;
+//                        current_nodes_index--;
+//                        current_node = GBWTGraph::node_to_handle(seq_graph_nodes[current_nodes_index]);
+//                        in_node_index = gbz.graph.get_length(current_node) - 1;
+//                    }
+//
+//                    in_node_index--;
+//
+//                    auto bptree_search = bptree.search(bwt_index);
+//
+//                    if (bptree_search.graph_position.value == 0) {
+//                        pos_t current_pos = {
+//                                gbz.graph.get_id(current_node),
+//                                gbz.graph.get_is_reverse(current_node),
+//                                in_node_index + 1
+//                        };
+//                        Run current_run = {bwt_index, gbwtgraph::Position::encode(current_pos)};
+//                        local_tmp.push_back(current_run);
+//
+//                        // Push batch to shared queue
+//                        if (local_tmp.size() >= batch_size) {
+////                            std::cerr << "Thread " << thread_id << " pushing batch of size " << local_tmp.size() << std::endl;
+//                            std::lock_guard<std::mutex> lock(queue_mutex);
+//                            insertion_queue.push(std::move(local_tmp));
+//                            local_tmp.clear();
+//                            queue_cv.notify_one();
+//                        }
+//                    }
+//                }
+//            }
+//
+//            // Final flush of local buffer
+//            if (!local_tmp.empty()) {
+//                std::lock_guard<std::mutex> lock(queue_mutex);
+//                insertion_queue.push(std::move(local_tmp));
+//                queue_cv.notify_one();
+//            }
+//        }
+//
+//        // Signal the inserter to finish
+//        {
+//            std::lock_guard<std::mutex> lock(queue_mutex);
+//            done = true;
+//            queue_cv.notify_one();
+//        }
+//
+//        inserter.join();
+//        std::cerr << "Traverse and insertion complete." << std::endl;
+//    }
+
 
 
 

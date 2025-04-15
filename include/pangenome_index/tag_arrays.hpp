@@ -39,6 +39,7 @@ namespace panindexer {
 
         void serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint16_t>>& tag_runs);
         void deserialize_run_by_run(const std::string& file_name);
+        void serialize_bptree_lite(std::string filename, BplusTree <Run> &bptree);
 
         void store_blocks(std::ostream& out);
         static std::pair<pos_t, uint16_t> load_block_at(std::istream& in, size_t &next_block_start);

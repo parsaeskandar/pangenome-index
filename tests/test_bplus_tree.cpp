@@ -23,7 +23,7 @@ namespace {
 
 
 
-        size_t test_nums = 100000;
+        size_t test_nums = 1000000;
         pos_t current_pos = pos_t{1, false, 0};
         for (int i = 0; i < test_nums; i++) {
             size_t first = i * 10;
