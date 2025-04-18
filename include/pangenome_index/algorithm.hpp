@@ -484,7 +484,7 @@ void find_long_mems(const std::string& pattern, size_t min_len, FastLocate& fmd_
         size_t j = i + min_len - 1;
         size_t len_fwd = 0;
 
-        bi_interval bint = {0, 0, fmd_index.bwt_size()};
+        FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
 
         for (int k = j; k >= (int)i; --k) {
             bint = fmd_index.backward_extend(bint, pattern[k]);
@@ -507,7 +507,7 @@ void find_long_mems(const std::string& pattern, size_t min_len, FastLocate& fmd_
             c = fmd_index.complement(c);
         }
 
-        bi_interval rev_bint = {0, 0, fmd_index.bwt_size()};
+        FastLocate::bi_interval rev_bint = {0, 0, fmd_index.bwt_size()};
         size_t len_rev = 0;
         for (char c : rev_pattern) {
             rev_bint = fmd_index.backward_extend(rev_bint, c);
@@ -525,7 +525,7 @@ void find_long_mems(const std::string& pattern, size_t min_len, FastLocate& fmd_
 
         // Step 3: prepare i for next iteration
         if (end < m - 1) {
-            bi_interval skip_bint = {0, 0, fmd_index.bwt_size() };
+            FastLocate::bi_interval skip_bint = {0, 0, fmd_index.bwt_size() };
             size_t len_skip = 0;
             for (int k = end + 1; k >= 0; --k) {
                 skip_bint = fmd_index.backward_extend(skip_bint, pattern[k]);
