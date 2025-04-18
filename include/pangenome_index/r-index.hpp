@@ -107,6 +107,22 @@ namespace panindexer {
         };
 
 
+        struct bi_interval {
+            size_type forward; // k
+            size_type reverse; // l
+            size_type size; // s
+
+            bi_interval() = default;
+            bi_interval(size_type fwd, size_type rev, size_type sz) : forward(fwd), reverse(rev), size(sz) {}
+
+            // equal operator
+            bool operator==(const bi_interval &other) const {
+                return this->forward == other.forward && this->reverse == other.reverse && this->size == other.size;
+            }
+        };
+
+
+
         struct Run_blocks {
 
             // store the cumulative number of each character till this block
@@ -306,6 +322,10 @@ namespace panindexer {
 
         // If last[i] = 1, last_to_run[last_rank(i)] is the identifier of the run.
         sdsl::int_vector<0> last_to_run;
+
+
+        // variables for FMD-index
+        std::array<uint8_t, 256> complement_table{};
 
 
 //------------------------------------------------------------------------------
@@ -529,6 +549,18 @@ namespace panindexer {
 
         size_type getSample(size_type run_id) const {
             return this->samples[run_id];
+        }
+
+
+        // FMD-index bidirectional extensions
+        bi_interval backward_extend(const bi_interval& bint, size_t symbol);
+        bi_interval forward_extend(const bi_interval& bint, size_t symbol);
+
+        void initialize_complement_table();
+
+        // Reverse complement
+        inline size_t complement(size_t symbol) const {
+            return complement_table[symbol];
         }
 
     private:

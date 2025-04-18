@@ -38,75 +38,17 @@ int main(int argc, char **argv) {
     std::string output_file = std::string(argv[3]);
 
 
-    int threads = 16;
+    int threads = 8;
 //    omp_set_num_threads(threads);
     size_t k = 31;
 
 
-//    cerr << "Reading the rindex file" << endl;
-//    std::ifstream in(index_file);
-//    bool fast;
-//    //fast or small index?
-//    in.read((char *) &fast, sizeof(fast));
-//    r_index<> idx;
-//    idx.load(in);
-
 
     FastLocate idx(rlbwt_file);
-//    idx.serialize(std::cout);
-//    exit(0);
-//    FastLocate idx;
-//    std::ifstream in(rlbwt_file);
-//    idx.load(in);
 
-    // print all blocks
-//    for (size_t i = 0; i < idx.blocks.size(); i++) {
-//        idx.blocks[i].print();
-//    }
-
-//    cerr << "Finished reading the rindex file" << endl;
-
-
-
-
-//    gbwt::range_type run(0, 13);
-//    size_t run_id = 0;
-//    bool starts_with_to = false;
-//    size_t first_run = 0;
-////    size_t symb = 'G';
-//
-////    auto a1 = idx.LF({0, 13}, 'A');
-//    cerr << '1' << endl;
-//    gbwt::range_type a = idx.LF({0, 13}, 'A');
-//    gbwt::range_type b = idx.LF(a, 'T');
-//
-//
-//    std::cerr << "LFFFF" << a << std::endl;
-//    std::cerr << "LFFFF" << b << std::endl;
-//
-//
-//    for (size_t i = 0; i < 14; i++) {
-//        std::cerr << "rankat " << idx.rankAt(i, 'A') << std::endl;
-//    }
-//
-//    auto test = idx.locate({10, 50});
-//    std::cerr << "LOCATE " << std::endl;
-//    for(auto i: test){
-//        std::cerr << i << std::endl;
-//    }
-
-//    idx.serialize(std::cout);
-
-
-
-//    exit(0);
     GBZ gbz;
     cerr << "Loading the graph file" << endl;
     sdsl::simple_sds::load_from(gbz, graph_file);
-
-//    auto input = vg::io::VPKG::try_load_first<gbwtgraph::GBZ, gbwtgraph::GBWTGraph, HandleGraph>(graph_file);
-//    gbz = std::move(get<0>(input));
-
 
     typedef gbwtgraph::Key64::value_type kmer_type;
 

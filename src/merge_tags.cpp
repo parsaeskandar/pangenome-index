@@ -508,7 +508,7 @@ int main(int argc, char **argv) {
     // get the first node of each path and get the component id of the node
 #pragma omp parallel for
     for (size_t i = 0; i < total_strings; i++) {
-        auto seq_graph_nodes = gbz.index.extract(i * 2);
+        auto seq_graph_nodes = gbz.index.extract(i);
         if (!seq_graph_nodes.empty()) {
             size_t node_id = gbwt::Node::id(seq_graph_nodes[0]);
             seq_id_to_comp_id[i] = node_to_comp_map.at(node_id);

@@ -364,6 +364,7 @@ namespace panindexer {
             grlbwt_file(source)
 //                buff_reader(&source)
     {
+        this->initialize_complement_table();
         double start = readTimer();
 
 
@@ -861,5 +862,81 @@ indexType(const FastLocate &) {
 }
 
 //------------------------------------------------------------------------------
+// Functionalities for FMD-index to be able to handle bidirectional BWT
+
+// Backward extension from Algorithm 2 from Li's paper: doi:10.1093/bioinformatics/bts280
+FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
+    size_t k = bint.forward;
+    size_t l = bint.reverse;
+    size_t s = bint.size;
+    std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'T', 'N'};
+
+
+    std::vector<size_t> k_vec;
+    k_vec.resize(6);
+    std::vector<size_t> s_vec;
+    s_vec.resize(6);
+    std::vector<size_t> l_vec;
+    l_vec.resize(6);
+
+
+
+//    std::cerr << this->C[this->sym_map[nuc[5]]] << std::endl;
+// TODO: this doesn't go higher than 6?
+    for (int b = 0; b < 5; b++){
+        size_t occ_b_k = this->rankAt(k, nuc[b]);
+        k_vec[b] = this->C[this->sym_map[nuc[b]]] + occ_b_k;
+        size_t occ_b_ks = this->rankAt(k + s, nuc[b]);
+        s_vec[b] = occ_b_ks - occ_b_k;
+
+    }
+    l_vec[0] = l;
+    l_vec[4] = l_vec[0] + s_vec[0];
+
+    for (int b = 3; b > 0; b--){
+        l_vec[b] = l_vec[b+1] + s_vec[b+1];
+    }
+    l_vec[5] = l_vec[1] + s_vec[1];
+    return bi_interval(k_vec[sym_map[a]], l_vec[sym_map[a]], s_vec[sym_map[a]]);
+}
+
+
+
+FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) {
+    bi_interval tmp = this->backward_extend({bint.reverse, bint.forward, bint.size}, symbol);
+    return {tmp.reverse, tmp.forward, tmp.size};
+}
+
+
+void FastLocate::initialize_complement_table() {
+    for (size_t i = 0; i < 256; ++i) {
+        complement_table[i] = i;
+    }
+    complement_table['A'] = 'T';
+    complement_table['C'] = 'G';
+    complement_table['G'] = 'C';
+    complement_table['T'] = 'A';
+    complement_table['a'] = 't';
+    complement_table['c'] = 'g';
+    complement_table['g'] = 'c';
+    complement_table['t'] = 'a';
+    complement_table['N'] = 'N';
+    complement_table['n'] = 'n';
+    complement_table['$'] = '$';
+    complement_table['\n'] = '\n';
+    complement_table[NENDMARKER] = NENDMARKER;
+}
+
+
+
+
+
+
+
+
+
+
+
+
 
 }

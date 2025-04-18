@@ -13,7 +13,7 @@ namespace gbwtgraph {
 // and its reverse complement. So this function returns the sorted vector of kmers
     template<class KeyType>
     std::vector <Kmer<KeyType>>
-    forward_strand_kmers(std::string::const_iterator begin, std::string::const_iterator end, size_t k) {
+    forward_reverse_strand_kmers(std::string::const_iterator begin, std::string::const_iterator end, size_t k) {
         std::vector <Kmer<KeyType>> result;
         if (k == 0 || k > KeyType::KMER_MAX_LENGTH) {
             std::cerr << "The maximum kmer size is " << KeyType::KMER_MAX_LENGTH << std::endl;
@@ -21,12 +21,14 @@ namespace gbwtgraph {
         }
 
         size_t valid_chars = 0, offset = 0;
-        KeyType forward_key;
+        KeyType forward_key, reverse_key;
         std::string::const_iterator iter = begin;
         while (iter != end) {
             forward_key.forward(k, *iter, valid_chars);
+            reverse_key.reverse(k, *iter);
             if (valid_chars >= k) {
                 result.push_back({forward_key, forward_key.hash(), offset_type(offset - (k - 1)), false});
+                result.push_back({reverse_key, reverse_key.hash(), offset_type(offset), true});
             }
             ++iter;
             offset++;
@@ -38,8 +40,8 @@ namespace gbwtgraph {
 
     template<class KeyType>
     std::vector <Kmer<KeyType>>
-    forward_strand_kmers(const std::string &seq, size_t k) {
-        return forward_strand_kmers<KeyType>(seq.begin(), seq.end(), k);
+    forward_reverse_strand_kmers(const std::string &seq, size_t k) {
+        return forward_reverse_strand_kmers<KeyType>(seq.begin(), seq.end(), k);
     }
 
 
