@@ -903,7 +903,7 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
 
 
 FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) {
-    bi_interval tmp = this->backward_extend({bint.reverse, bint.forward, bint.size}, symbol);
+    bi_interval tmp = this->backward_extend({bint.reverse, bint.forward, bint.size}, this->complement(symbol));
     return {tmp.reverse, tmp.forward, tmp.size};
 }
 

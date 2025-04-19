@@ -13,6 +13,7 @@
 
 #include "../include/pangenome_index/r-index.hpp"
 #include "../deps/grlBWT/scripts/fm_index.h"
+#include "../include/pangenome_index/algorithm.hpp"
 
 
 using namespace panindexer;
@@ -303,7 +304,22 @@ TEST(FMDINDEX_Test, BackwardExtensionMatchesLF) {
 }
 
 
+TEST(LONG_MEM_TEST, SmallTest){
+        std::string rlbwt_file = "../test_data/bidirectional_test/small_test/test.rl_bwt";
+        FastLocate r_index(rlbwt_file);
 
+        // a small test from https://arxiv.org/abs/2403.02008
+        std::string pattern = "TACATAGATTAG";
+
+        auto mems = find_all_mems(pattern, 4, 1, r_index);
+        ASSERT_EQ(mems[0].start, 0);
+        ASSERT_EQ(mems[0].end, 4);
+        ASSERT_EQ(mems[1].start, 4);
+        ASSERT_EQ(mems[1].end, 8);
+        ASSERT_EQ(mems[2].start, 6);
+        ASSERT_EQ(mems[2].end, 11);
+
+}
 
 
 

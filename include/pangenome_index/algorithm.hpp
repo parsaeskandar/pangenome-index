@@ -473,71 +473,90 @@ std::unordered_map<nid_t, size_t> node_to_component(GBZ &gbz){
 }
 
 
+// As https://arxiv.org/abs/2403.02008 this returns the number of characters matched
+// Inspired by Li's code: https://github.com/lh3/ropebwt3/blob/master/fm-index.c
 
+size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
+    FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
 
-// This function find the long MEMs in the pattern using the algorithm2 from https://arxiv.org/abs/2403.02008
-void find_long_mems(const std::string& pattern, size_t min_len, FastLocate& fmd_index) {
-    size_t m = pattern.length();
-    size_t i = 0;
-
-    while (i <= m - min_len) {
-        size_t j = i + min_len - 1;
-        size_t len_fwd = 0;
-
-        FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
-
-        for (int k = j; k >= (int)i; --k) {
-            bint = fmd_index.backward_extend(bint, pattern[k]);
-            if (bint.size == 0) {
-                break;
-            }
-            ++len_fwd;
-        }
-
-        if (len_fwd < (j - i + 1)) {
-            // Failed to find a MEM of length ≥ L starting at i, skip ahead
-            size_t k = j - len_fwd + 1;
-            i = k;
-            continue;
-        }
-
-        std::string rev_pattern = pattern.substr(i);
-        std::reverse(rev_pattern.begin(), rev_pattern.end());
-        for (char& c : rev_pattern) {
-            c = fmd_index.complement(c);
-        }
-
-        FastLocate::bi_interval rev_bint = {0, 0, fmd_index.bwt_size()};
-        size_t len_rev = 0;
-        for (char c : rev_pattern) {
-            rev_bint = fmd_index.backward_extend(rev_bint, c);
-            if (rev_bint.size == 0) {
-                break;
-            }
-            ++len_rev;
-        }
-
-        size_t end = i + len_rev - 1;
-
-        // Report MEM: pattern[i..end]
-        std::string mem = pattern.substr(i, len_rev);
-        std::cout << "MEM: [" << i << ", " << end << "] = " << mem << "\n";
-
-        // Step 3: prepare i for next iteration
-        if (end < m - 1) {
-            FastLocate::bi_interval skip_bint = {0, 0, fmd_index.bwt_size() };
-            size_t len_skip = 0;
-            for (int k = end + 1; k >= 0; --k) {
-                skip_bint = fmd_index.backward_extend(skip_bint, pattern[k]);
-                if (skip_bint.size == 0) break;
-                ++len_skip;
-            }
-            i = end - len_skip + 2;
-        } else {
+    size_t matched = 0;
+    for (int i = static_cast<int>(len) - 1; i >= 0; --i) {
+        bint = fmd_index.backward_extend(bint, Q[i]);
+        if (bint.size == 0) {
             break;
         }
+        ++matched;
     }
+
+    return matched;
 }
+
+    struct MEM {
+        size_t start;
+        size_t end;
+        size_t size;
+    };
+
+    size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
+                         FastLocate& fmd_index, std::vector<MEM>& output) {
+        size_t len = pattern.length();
+        if (len - x < min_len) return len;
+
+        // Step 1: initial interval from P[x + min_len - 1]
+        FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
+
+        for (int64_t i = x + min_len - 1; i >= (int64_t)x; --i) {
+            bint = fmd_index.backward_extend(bint, pattern[i]);
+            if (bint.size < min_occ || bint.size == 0) {
+                return i + 1; // no MEM at x
+            }
+        }
+
+        // Step 2: forward extension from P[x + min_len]
+        size_t j = x + min_len;
+//        std::cerr << "Extending Forward from " << j << std::endl;
+
+        while (j < len) {
+            FastLocate::bi_interval next = fmd_index.forward_extend(bint, pattern[j]);
+            if (next.size < min_occ || next.size == 0) break;
+            bint = next;
+            ++j;
+        }
+
+//        std::cerr << "Finished extending forward at " << j << std::endl;
+
+        // Report the MEM [x, j)
+        output.push_back({x, j - 1, j - x});
+
+        if (j == len) return len;
+
+        // Step 3: reset to P[j], backward extend from j−1 to x+1
+        FastLocate::bi_interval back = {0, 0, fmd_index.bwt_size()};
+        back = fmd_index.backward_extend(back, pattern[j]);
+
+        size_t i = j - 1;
+        for (; i > x; --i) {
+            back = fmd_index.backward_extend(back, pattern[i]);
+            if (back.size < min_occ || back.size == 0) break;
+        }
+
+        return i + 1;
+    }
+
+
+    std::vector<MEM> find_all_mems(const std::string& pattern, size_t min_len, size_t min_occ, FastLocate& fmd_index) {
+        std::vector<MEM> mems;
+        size_t x = 0;
+
+        while (x < pattern.length()) {
+            x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
+        }
+
+        return mems;
+    }
+
+
+
 
 
 
