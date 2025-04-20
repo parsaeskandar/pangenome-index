@@ -495,6 +495,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         size_t start;
         size_t end;
         size_t size;
+        FastLocate::bi_interval bi_interval;
     };
 
     size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
@@ -526,7 +527,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 //        std::cerr << "Finished extending forward at " << j << std::endl;
 
         // Report the MEM [x, j)
-        output.push_back({x, j - 1, j - x});
+        output.push_back({x, j - 1, j - x, bint});
 
         if (j == len) return len;
 
