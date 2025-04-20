@@ -81,6 +81,31 @@ namespace panindexer {
         }
     }
 
+    void TagArray::serialize_run_by_run_batch(sdsl::int_vector_buffer<8>& out, const std::vector<std::pair<gbwtgraph::Position, uint16_t>>& tag_runs){
+
+        for (auto it = tag_runs.begin(); it != tag_runs.end(); ++it) {
+            std::vector<gbwt::byte_type> encoded_runs_temp;
+
+            // adding the pair (graph_value, length) as ByteCode to the encoded_runs vector
+            pos_t current_pos = it->first.decode();
+            uint16_t total_length = it->second;
+            int max_tag_len = 1 << length_bits;
+            while (total_length >= max_tag_len){
+                gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), max_tag_len - 1, id(current_pos));
+                gbwt::ByteCode::write(out, encoded);
+//                        out.push_back(encoded);
+                total_length -= (max_tag_len - 1);
+            }
+
+            if (total_length > 0){
+                gbwt::size_type encoded = encode_run_length(offset(current_pos), is_rev(current_pos), total_length, id(current_pos));
+//                        out.push_back(encoded);
+                gbwt::ByteCode::write(out, encoded);
+            }
+
+        }
+    }
+
     void TagArray::serialize_bptree_lite(std::string filename, BplusTree <Run> &bptree){
 
         sdsl::int_vector_buffer<8> out(filename, std::ios::out | std::ios::trunc);
@@ -183,6 +208,8 @@ namespace panindexer {
 
 
     }
+
+
 
 
     void TagArray::serialize(std::ostream &out) {

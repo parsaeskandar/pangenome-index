@@ -182,7 +182,10 @@ int main(int argc, char **argv) {
     auto time7 = chrono::high_resolution_clock::now();
 #endif
 
-    traverse_sequences_parallel(gbz, bptree, idx, end_of_seq);
+
+    panindexer::TagArray tag_array;
+    traverse_sequences_parallel(gbz, bptree, idx, tag_array, end_of_seq, output_file);
+//    traverse_sequences_parallel(gbz, bptree, idx, end_of_seq);
 #if TIME
     auto time8 = chrono::high_resolution_clock::now();
     std::chrono::duration<double> duration5 = time8 - time7;
@@ -190,87 +193,88 @@ int main(int argc, char **argv) {
 #endif
 
 
-    cerr << "The final number of items in the BPlusTree is: " << bptree.get_bpt_size() << endl;
-    tag_arrays_covered = 0;
 
-
-    int max_tag_run_length = 32;
-    cerr << "calculating the fraction of the tag arrays covered " << endl;
-    // calculating the fraction of the tag arrays covered
-    int count = 0;
-    for (auto it = bptree.begin(); it != bptree.end(); ++it) {
-        panindexer::Run current_item = *it;
-        if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
-            auto next_it = it;
-            ++next_it; // Move to the next element
-            if (next_it != bptree.end()) { // Check if the next element is not the end
-                panindexer::Run next_item = *next_it; // Get the next item
-                tag_arrays_covered += (next_item.start_position - current_item.start_position);
-                // change the max_tag_run_length if the tag_arrays_covered is bigger that it
-                if (next_item.start_position - current_item.start_position > max_tag_run_length){
-                    max_tag_run_length = next_item.start_position - current_item.start_position;
-                }
-                count++;
-                // print the decoded items of current_item and next item
-                if (count < 5) {
-
-                    pos_t t1 = current_item.graph_position.decode();
-                    cerr << "The current item is: " << current_item << endl;
-                    cerr << "the graph position is " << t1 << endl;
-                    cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
-                    cerr << "The current start position is " << current_item.start_position << endl;
-                }
-//                if (next_item.start_position - current_item.start_position > 500){
-//                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
+//    cerr << "The final number of items in the BPlusTree is: " << bptree.get_bpt_size() << endl;
+//    tag_arrays_covered = 0;
+//
+//
+//    int max_tag_run_length = 32;
+//    cerr << "calculating the fraction of the tag arrays covered " << endl;
+//    // calculating the fraction of the tag arrays covered
+//    int count = 0;
+//    for (auto it = bptree.begin(); it != bptree.end(); ++it) {
+//        panindexer::Run current_item = *it;
+//        if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
+//            auto next_it = it;
+//            ++next_it; // Move to the next element
+//            if (next_it != bptree.end()) { // Check if the next element is not the end
+//                panindexer::Run next_item = *next_it; // Get the next item
+//                tag_arrays_covered += (next_item.start_position - current_item.start_position);
+//                // change the max_tag_run_length if the tag_arrays_covered is bigger that it
+//                if (next_item.start_position - current_item.start_position > max_tag_run_length){
+//                    max_tag_run_length = next_item.start_position - current_item.start_position;
 //                }
-            }
-        } else {
-            std::cerr << "================================ " << count << std::endl;
-            // this case should not happen other than when we are at the end
-            pos_t t1 = current_item.graph_position.decode();
-            cerr << "The current item is: " << current_item << endl;
-            cerr << "the graph position is " << t1 << endl;
-            cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
-            cerr << "The current start position is " << current_item.start_position << endl;
-
-
-            auto next_it = it;
-            ++next_it;
-
-            if (next_it != bptree.end()){
-
-                panindexer::Run next_item = *next_it;
-
-                pos_t t2 = next_item.graph_position.decode();
-                cerr << "The current item is: " << next_item << endl;
-                cerr << "the graph position is " << t2 << endl;
-                cerr << "node id: " << id(t2) << " offset " << offset(t2) << " rev? " << is_rev(t2) << endl;
-                cerr << "The current start position is " << next_item.start_position << endl;
-
-                std::cerr << "==========================================================" << std::endl;
-
-            }
-
-
-
-
-
-        }
-    }
-
-    cerr << "The fraction of the tag arrays covered after filling the gaps is: " << tag_arrays_covered << " / "
-         << bwt_size << " = "
-         << (double) tag_arrays_covered / bwt_size << endl;
-
-
-    cerr << "The maximum tag run length is: " << max_tag_run_length << endl;
-    int run_length_bit = ceil(log2(max_tag_run_length));
-    cerr << "The number of bits required for the maximum tag run length is: " << run_length_bit << endl;
-    panindexer::TagArray tag_array;
-//    tag_array.load_bptree_lite(bptree);
-    tag_array.serialize_bptree_lite(output_file, bptree);
-
-    cerr << "The bptree serialized into Tag array DS correctly " << endl;
+//                count++;
+//                // print the decoded items of current_item and next item
+//                if (count < 5) {
+//
+//                    pos_t t1 = current_item.graph_position.decode();
+//                    cerr << "The current item is: " << current_item << endl;
+//                    cerr << "the graph position is " << t1 << endl;
+//                    cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+//                    cerr << "The current start position is " << current_item.start_position << endl;
+//                }
+////                if (next_item.start_position - current_item.start_position > 500){
+////                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
+////                }
+//            }
+//        } else {
+//            std::cerr << "================================ " << count << std::endl;
+//            // this case should not happen other than when we are at the end
+//            pos_t t1 = current_item.graph_position.decode();
+//            cerr << "The current item is: " << current_item << endl;
+//            cerr << "the graph position is " << t1 << endl;
+//            cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+//            cerr << "The current start position is " << current_item.start_position << endl;
+//
+//
+//            auto next_it = it;
+//            ++next_it;
+//
+//            if (next_it != bptree.end()){
+//
+//                panindexer::Run next_item = *next_it;
+//
+//                pos_t t2 = next_item.graph_position.decode();
+//                cerr << "The current item is: " << next_item << endl;
+//                cerr << "the graph position is " << t2 << endl;
+//                cerr << "node id: " << id(t2) << " offset " << offset(t2) << " rev? " << is_rev(t2) << endl;
+//                cerr << "The current start position is " << next_item.start_position << endl;
+//
+//                std::cerr << "==========================================================" << std::endl;
+//
+//            }
+//
+//
+//
+//
+//
+//        }
+//    }
+//
+//    cerr << "The fraction of the tag arrays covered after filling the gaps is: " << tag_arrays_covered << " / "
+//         << bwt_size << " = "
+//         << (double) tag_arrays_covered / bwt_size << endl;
+//
+//
+//    cerr << "The maximum tag run length is: " << max_tag_run_length << endl;
+//    int run_length_bit = ceil(log2(max_tag_run_length));
+//    cerr << "The number of bits required for the maximum tag run length is: " << run_length_bit << endl;
+//
+////    tag_array.load_bptree_lite(bptree);
+//    tag_array.serialize_bptree_lite(output_file, bptree);
+//
+//    cerr << "The bptree serialized into Tag array DS correctly " << endl;
 
 
 

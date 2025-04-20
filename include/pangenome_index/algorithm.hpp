@@ -17,6 +17,7 @@
 #include <hash_map.hpp>
 #include <gbwt/internal.h>
 #include "r-index.hpp"
+#include "tag_arrays.hpp"
 #include "gbwtgraph/algorithms.h"
 #include "utils.hpp"
 
@@ -359,13 +360,11 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
 }
 
 
-void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &idx,
-                                 vector <pair<uint64_t, uint64_t>> &end_of_seq) {
+void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &idx, TagArray &tag_array,
+                                 vector <pair<uint64_t, uint64_t>> &end_of_seq, std::string filename) {
     auto number_of_sequences = end_of_seq.size();
 
     std::vector<Run> tmp1;
-    omp_lock_t lock;
-    omp_init_lock(&lock);
 
     cerr << "Filling the gaps on the bptree" << endl;
 
@@ -438,15 +437,126 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 
     // Merge all thread-local results into `tmp1` (single-threaded step)
     for (auto& local_tmp : thread_tmp) {
-        for (auto &i : local_tmp) {
-            bptree.insert(i, 1);
+//        for (auto &i : local_tmp) {
+//
+//            bptree.insert(i, 1);
+//        }
+        tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
+    }
+
+    // Sort the merged results
+    std::sort(tmp1.begin(), tmp1.end(), [](const Run &a, const Run &b) {
+        return a.start_position < b.start_position;
+    });
+
+    size_t runs_current_position = 0;
+
+    // now we traverse the bptree and whenever we hit a gap, we will get the required runs to fill that from the tmp1
+    // and then will send them to the output
+
+    sdsl::int_vector_buffer<8> out(filename, std::ios::out | std::ios::trunc);
+
+    auto it = bptree.begin();
+    Run current_item = *it;
+
+    std::pair<Run, uint16_t> latest_run;
+    bool has_latest_run = false;
+    std::vector<std::pair<gbwtgraph::Position, uint16_t>> runs_to_add;
+
+    // the case when we have to start from the tmp1 runs
+    if (current_item.start_position > tmp1[runs_current_position].start_position){
+        latest_run = {tmp1[runs_current_position], 1};
+        has_latest_run = true;
+        auto num_runs_to_add = current_item.start_position - tmp1[runs_current_position].start_position;
+        for (int i = 1; i < num_runs_to_add; i++){
+            if (tmp1[i].graph_position.value == latest_run.first.graph_position.value){
+                latest_run.second++;
+            } else {
+                runs_to_add.push_back({latest_run.first.graph_position, latest_run.second});
+                latest_run = {tmp1[i], 1};
+            }
+
         }
-//        tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
+
+        runs_current_position += num_runs_to_add;
+
+    }
+
+    // have to iterate over the bptree
+    for (auto it = bptree.begin(); it != bptree.end(); ++it) {
+        Run current_item = *it;
+        if (current_item.graph_position.value != 0) {
+            // we have an actual run with graph position
+            auto next_it = it;
+            ++next_it;
+            if (next_it != bptree.end()) {
+                Run next_item = *next_it;
+                auto total_length = next_item.start_position - current_item.start_position;
+
+                if (!has_latest_run){
+                    has_latest_run = true;
+                    latest_run = {current_item, total_length};
+                } else {
+                    if (latest_run.first.graph_position.value == current_item.graph_position.value) {
+                        latest_run.second += total_length;
+                    } else {
+                        runs_to_add.push_back({latest_run.first.graph_position, latest_run.second});
+                        latest_run = {current_item, total_length};
+                    }
+                }
+
+            }
+
+        } else if (current_item.graph_position.value == 0){
+            // This is a gap run and we have to fill it with the runs from tmp1
+            auto next_it = it;
+            ++next_it;
+            if (next_it != bptree.end()) {
+                Run next_item = *next_it;
+                auto total_runs_to_add = next_item.start_position - current_item.start_position;
+
+                for (auto i = 0; i < total_runs_to_add; i++){
+                    if (tmp1[runs_current_position + i].graph_position.value == latest_run.first.graph_position.value){
+                        latest_run.second++;
+                    } else {
+                        runs_to_add.push_back({latest_run.first.graph_position, latest_run.second});
+                        latest_run = {tmp1[runs_current_position + i], 1};
+                    }
+                }
+                runs_current_position += total_runs_to_add;
+
+            } else {
+                // we have reached the end of the bptree and we have to add all the remaining runs from tmp1
+                for (auto i = runs_current_position; i < tmp1.size(); i++){
+                    if (tmp1[i].graph_position.value == latest_run.first.graph_position.value){
+                        latest_run.second++;
+                    } else {
+                        runs_to_add.push_back({latest_run.first.graph_position, latest_run.second});
+                        latest_run = {tmp1[i], 1};
+                    }
+                }
+
+                runs_to_add.push_back({latest_run.first.graph_position, latest_run.second});
+
+            }
+
+        }
+
+        if (runs_to_add.size() >= 1024){
+            tag_array.serialize_run_by_run_batch(out, runs_to_add);
+            runs_to_add.clear();
+        }
+    }
+
+    // add the remaining runs to the output
+    if (runs_to_add.size() > 0){
+        tag_array.serialize_run_by_run_batch(out, runs_to_add);
     }
 
 
-    omp_destroy_lock(&lock);
 }
+
+
 
 
 
