@@ -730,6 +730,12 @@ namespace panindexer {
         std::sort(unique_positions.begin(), unique_positions.end());
         unique_positions.erase(std::unique(unique_positions.begin(), unique_positions.end()), unique_positions.end());
 
+        std::cout << "Number of unique positions: " << unique_positions.size() << std::endl;
+        // print the unique positions
+        for (auto pos : unique_positions) {
+            std::cout << pos << std::endl;
+        }
+
     }
 
 

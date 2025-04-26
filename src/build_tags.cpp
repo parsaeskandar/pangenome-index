@@ -202,65 +202,65 @@ int main(int argc, char **argv) {
 //    cerr << "calculating the fraction of the tag arrays covered " << endl;
 //    // calculating the fraction of the tag arrays covered
 //    int count = 0;
-//    for (auto it = bptree.begin(); it != bptree.end(); ++it) {
-//        panindexer::Run current_item = *it;
-//        if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
-//            auto next_it = it;
-//            ++next_it; // Move to the next element
-//            if (next_it != bptree.end()) { // Check if the next element is not the end
-//                panindexer::Run next_item = *next_it; // Get the next item
-//                tag_arrays_covered += (next_item.start_position - current_item.start_position);
-//                // change the max_tag_run_length if the tag_arrays_covered is bigger that it
-//                if (next_item.start_position - current_item.start_position > max_tag_run_length){
-//                    max_tag_run_length = next_item.start_position - current_item.start_position;
-//                }
-//                count++;
-//                // print the decoded items of current_item and next item
-//                if (count < 5) {
-//
-//                    pos_t t1 = current_item.graph_position.decode();
-//                    cerr << "The current item is: " << current_item << endl;
-//                    cerr << "the graph position is " << t1 << endl;
-//                    cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
-//                    cerr << "The current start position is " << current_item.start_position << endl;
-//                }
-////                if (next_item.start_position - current_item.start_position > 500){
-////                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
-////                }
-//            }
-//        } else {
-//            std::cerr << "================================ " << count << std::endl;
-//            // this case should not happen other than when we are at the end
-//            pos_t t1 = current_item.graph_position.decode();
-//            cerr << "The current item is: " << current_item << endl;
-//            cerr << "the graph position is " << t1 << endl;
-//            cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
-//            cerr << "The current start position is " << current_item.start_position << endl;
-//
-//
-//            auto next_it = it;
-//            ++next_it;
-//
-//            if (next_it != bptree.end()){
-//
-//                panindexer::Run next_item = *next_it;
-//
-//                pos_t t2 = next_item.graph_position.decode();
-//                cerr << "The current item is: " << next_item << endl;
-//                cerr << "the graph position is " << t2 << endl;
-//                cerr << "node id: " << id(t2) << " offset " << offset(t2) << " rev? " << is_rev(t2) << endl;
-//                cerr << "The current start position is " << next_item.start_position << endl;
-//
-//                std::cerr << "==========================================================" << std::endl;
-//
-//            }
-//
-//
-//
-//
-//
-//        }
-//    }
+//     for (auto it = bptree.begin(); it != bptree.end(); ++it) {
+//         panindexer::Run current_item = *it;
+//         if (current_item.graph_position.value != 0) { // Check if the current item is not a gap
+//             auto next_it = it;
+//             ++next_it; // Move to the next element
+//             if (next_it != bptree.end()) { // Check if the next element is not the end
+//                 panindexer::Run next_item = *next_it; // Get the next item
+//                 tag_arrays_covered += (next_item.start_position - current_item.start_position);
+//                 // change the max_tag_run_length if the tag_arrays_covered is bigger that it
+//                 if (next_item.start_position - current_item.start_position > max_tag_run_length){
+//                     max_tag_run_length = next_item.start_position - current_item.start_position;
+//                 }
+//                 count++;
+//                 // print the decoded items of current_item and next item
+//                 if (count < 5) {
+
+//                     pos_t t1 = current_item.graph_position.decode();
+//                     cerr << "The current item is: " << current_item << endl;
+//                     cerr << "the graph position is " << t1 << endl;
+//                     cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+//                     cerr << "The current start position is " << current_item.start_position << endl;
+//                 }
+// //                if (next_item.start_position - current_item.start_position > 500){
+// //                    cerr << "The current item is: " << current_item << " The next item is: " << next_item << endl;
+// //                }
+//             }
+//         } else {
+//             std::cerr << "================================ " << count << std::endl;
+//             // this case should not happen other than when we are at the end
+//             pos_t t1 = current_item.graph_position.decode();
+//             cerr << "The current item is: " << current_item << endl;
+//             cerr << "the graph position is " << t1 << endl;
+//             cerr << "node id: " << id(t1) << " offset " << offset(t1) << " rev? " << is_rev(t1) << endl;
+//             cerr << "The current start position is " << current_item.start_position << endl;
+
+
+//             auto next_it = it;
+//             ++next_it;
+
+//             if (next_it != bptree.end()){
+
+//                 panindexer::Run next_item = *next_it;
+
+//                 pos_t t2 = next_item.graph_position.decode();
+//                 cerr << "The current item is: " << next_item << endl;
+//                 cerr << "the graph position is " << t2 << endl;
+//                 cerr << "node id: " << id(t2) << " offset " << offset(t2) << " rev? " << is_rev(t2) << endl;
+//                 cerr << "The current start position is " << next_item.start_position << endl;
+
+//                 std::cerr << "==========================================================" << std::endl;
+
+//             }
+
+
+
+
+
+//         }
+//     }
 //
 //    cerr << "The fraction of the tag arrays covered after filling the gaps is: " << tag_arrays_covered << " / "
 //         << bwt_size << " = "

@@ -20,6 +20,8 @@
 #include "tag_arrays.hpp"
 #include "gbwtgraph/algorithms.h"
 #include "utils.hpp"
+//#include <stxxl/sorter>
+//#include <stxxl/vector>
 
 
 
@@ -442,12 +444,16 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
 //            bptree.insert(i, 1);
 //        }
         tmp1.insert(tmp1.end(), local_tmp.begin(), local_tmp.end());
+        local_tmp.clear();
     }
 
     // Sort the merged results
     std::sort(tmp1.begin(), tmp1.end(), [](const Run &a, const Run &b) {
         return a.start_position < b.start_position;
     });
+
+    std::cerr << "Sorted the tmp1 with size " << tmp1.size() << std::endl;
+
 
     size_t runs_current_position = 0;
 
@@ -602,51 +608,64 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 }
 
     struct MEM {
-        size_t start;
-        size_t end;
-        size_t size;
+        int64_t start;
+        int64_t end;
+        int64_t size;
         FastLocate::bi_interval bi_interval;
     };
 
-    size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
+    size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, int64_t x,
                          FastLocate& fmd_index, std::vector<MEM>& output) {
+
+        int64_t i, j;
         size_t len = pattern.length();
         if (len - x < min_len) return len;
 
         // Step 1: initial interval from P[x + min_len - 1]
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
-
-        for (int64_t i = x + min_len - 1; i >= (int64_t)x; --i) {
+        // std::cerr << "here" << std::endl;
+        for (i = x + min_len - 1; i >= (int64_t)x; --i) {
             bint = fmd_index.backward_extend(bint, pattern[i]);
-            if (bint.size < min_occ || bint.size == 0) {
-                return i + 1; // no MEM at x
+            if (bint.size < min_occ) {
+                break; // no MEM at x
             }
         }
-
+        // std::cerr << "here2" << std::endl;
+        if (i >= x) return i + 1;
+        // std::cerr << "here21234" << std::endl;
         // Step 2: forward extension from P[x + min_len]
-        size_t j = x + min_len;
+        // size_t j = x + min_len;
 //        std::cerr << "Extending Forward from " << j << std::endl;
 
-        while (j < len) {
+        for (j = x + min_len; j < len; ++j) {
             FastLocate::bi_interval next = fmd_index.forward_extend(bint, pattern[j]);
-            if (next.size < min_occ || next.size == 0) break;
+
+            // std::cerr << "next.size: " << next.size << " next " << std::endl;
+            if (next.size < min_occ) break;
+
+            // std::cerr << "Forward extension" << std::endl;
             bint = next;
-            ++j;
         }
+        // while (j < len) {
+        //     FastLocate::bi_interval next = fmd_index.forward_extend(bint, pattern[j]);
+        //     if (next.size < min_occ || next.size == 0) break;
+        //     bint = next;
+        //     ++j;
+        // }
 
 //        std::cerr << "Finished extending forward at " << j << std::endl;
-
+        // std::cerr << "here3" << std::endl;
         // Report the MEM [x, j)
         output.push_back({x, j - 1, j - x, bint});
 
         if (j == len) return len;
-
+        // std::cerr << "here4" << std::endl;
         // Step 3: reset to P[j], backward extend from j−1 to x+1
         FastLocate::bi_interval back = {0, 0, fmd_index.bwt_size()};
         back = fmd_index.backward_extend(back, pattern[j]);
 
-        size_t i = j - 1;
-        for (; i > x; --i) {
+        
+        for (i = j - 1; i > x; --i) {
             back = fmd_index.backward_extend(back, pattern[i]);
             if (back.size < min_occ || back.size == 0) break;
         }
@@ -657,11 +676,12 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
     std::vector<MEM> find_all_mems(const std::string& pattern, size_t min_len, size_t min_occ, FastLocate& fmd_index) {
         std::vector<MEM> mems;
-        size_t x = 0;
+        int64_t x = 0;
 
-        while (x < pattern.length()) {
+
+        do {
             x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
-        }
+        } while (x < pattern.length());
 
         return mems;
     }
@@ -675,3 +695,4 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 }
 
 #endif //PANGENOME_INDEX_ALGORITHM_HPP
+

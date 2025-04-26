@@ -107,6 +107,7 @@ namespace panindexer {
 
     FastLocate::FastLocate() :
             buff_reader(nullptr) {
+        this->initialize_complement_table();
     }
 
     FastLocate::FastLocate(const FastLocate &source) {
@@ -903,8 +904,14 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
 
 
 FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) {
-    bi_interval tmp = this->backward_extend({bint.reverse, bint.forward, bint.size}, this->complement(symbol));
-    return {tmp.reverse, tmp.forward, tmp.size};
+    bi_interval tmp = bi_interval(bint.reverse, bint.forward, bint.size);
+    // print tmp
+    // std::cerr << "tmp: " << tmp.forward << " " << tmp.reverse << " " << tmp.size << std::endl;
+    size_t comp = this->complement(symbol);
+    // std::cerr << symbol << " " << comp << std::endl;
+    tmp = this->backward_extend(tmp, comp);
+    // std::cerr << "tmp: " << tmp.forward << " " << tmp.reverse << " " << tmp.size << std::endl;
+    return bi_interval(tmp.reverse, tmp.forward, tmp.size);
 }
 
 

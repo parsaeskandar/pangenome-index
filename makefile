@@ -9,7 +9,7 @@ MY_CXX := clang++
 OMP_HOMEBREW_PREFIX := /opt/homebrew/Cellar/libomp/18.1.8
 
 PARALLEL_FLAGS=-fopenmp -pthread
-LIBS=-L$(LIB_DIR) -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt
+LIBS=-L$(LIB_DIR) -L/opt/homebrew/lib -lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt -lstxxl
 
 
 ifeq ($(shell uname -s), Darwin)
@@ -44,7 +44,7 @@ endif
 
 
 
-CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg -Ideps/grlBWT/include -UNDEBUG
+CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -I/opt/homebrew/include -Iinclude -I$(INC_DIR) -Ideps/r-index/internal -Ideps/vg -Ideps/grlBWT/include -UNDEBUG
 
 
 HEADERS=$(wildcard include/pangenome_index/*.hpp)
@@ -53,7 +53,7 @@ LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o)
 LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
-PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags merge_tags build_rindex tags_check)
+PROGRAMS=$(addprefix $(BUILD_BIN)/,build_tags query_tags merge_tags build_rindex find_mems)
 
 
 .PHONY: all clean directories test
