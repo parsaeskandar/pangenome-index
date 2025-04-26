@@ -1,0 +1,118 @@
+#include "pangenome_index/algorithm.hpp"
+#include "pangenome_index/tag_arrays.hpp"
+#include <chrono>
+
+using namespace std;
+using namespace gbwtgraph;
+using namespace panindexer;
+
+#ifndef TIME
+#define TIME 1
+#endif
+
+int main(int argc, char **argv) {
+    string r_index_file = argv[1];
+    string tag_array_index = argv[2];
+    string reads_file = argv[3];
+    int mem_length = std::stoi(argv[4]);
+    int min_occ = std::stoi(argv[5]);
+
+#if TIME
+    auto time1 = chrono::high_resolution_clock::now();
+    double total_mem_time = 0.0;
+    double total_tag_time = 0.0;
+#endif
+
+    cerr << "Reading the rindex file" << endl;
+    FastLocate r_index;
+    if (!sdsl::load_from_file(r_index, r_index_file)) {
+        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    // r_index.initialize_complement_table();
+
+    // FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
+    // auto forw = r_index.forward_extend(bint, 'A');
+    // // print forw
+    // std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
+    // auto back = r_index.backward_extend(bint, 'T');
+    // std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;  
+    // exit(0);
+
+
+#if TIME
+    auto time2 = chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration1 = time2 - time1;
+    std::cerr << "Loading r-index into memory took " << duration1.count() << " seconds" << std::endl;
+#endif
+
+    cerr << "Reading the tag array index" << endl;
+    TagArray tag_array;
+    std::ifstream in_ds(tag_array_index);
+    tag_array.load_compressed_tags(in_ds);
+
+#if TIME
+    auto time3 = chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration2 = time3 - time2;
+    std::cerr << "Loading tag arrays took " << duration2.count() << " seconds" << std::endl;
+#endif
+
+    // Open reads file
+    std::ifstream reads(reads_file);
+    if (!reads) {
+        std::cerr << "Cannot open reads file: " << reads_file << std::endl;
+        std::exit(EXIT_FAILURE);
+    }
+
+    std::string read;
+    while (std::getline(reads, read)) {
+        if (read.empty()) continue;
+
+#if TIME
+        auto time4 = chrono::high_resolution_clock::now();
+#endif
+
+        // Find MEMs for this read
+        auto mems = find_all_mems(read, mem_length, min_occ, r_index);
+
+#if TIME
+        auto time5 = chrono::high_resolution_clock::now();
+        std::chrono::duration<double> duration3 = time5 - time4;
+        total_mem_time += duration3.count();
+        std::cerr << "Finding MEMs took " << duration3.count() << " seconds" << std::endl;
+#endif
+
+        // Print results for this read
+        std::cout << "Read: " << read << std::endl;
+        for (const auto& mem : mems) {
+            std::cout << "MEM position: " << mem.start << ", length: " << mem.size << std::endl;
+            std::cout << "BWT interval start: " << mem.bi_interval.forward << ", size: " << mem.bi_interval.size << std::endl;
+
+            size_t tag_nums = 0;
+
+#if TIME
+            auto time6 = chrono::high_resolution_clock::now();
+#endif
+
+            // Query the tag array for this MEM
+            tag_array.query_compressed(mem.bi_interval.forward, mem.bi_interval.forward + mem.bi_interval.size, tag_nums);
+
+#if TIME
+            auto time7 = chrono::high_resolution_clock::now();
+            std::chrono::duration<double> duration4 = time7 - time6;
+            total_tag_time += duration4.count();
+            std::cerr << "Querying tag array took " << duration4.count() << " seconds" << std::endl;
+#endif
+        }
+        std::cout << std::endl;
+    }
+
+    reads.close();
+
+#if TIME
+    std::cerr << "\nTotal time for finding all MEMs: " << total_mem_time << " seconds" << std::endl;
+    std::cerr << "Total time for all tag queries: " << total_tag_time << " seconds" << std::endl;
+#endif
+}
+
