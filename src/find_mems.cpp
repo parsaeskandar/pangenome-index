@@ -14,8 +14,8 @@ int main(int argc, char **argv) {
     string r_index_file = argv[1];
     string tag_array_index = argv[2];
     string reads_file = argv[3];
-    int64_t mem_length = std::stoi(argv[4]);
-    int64_t min_occ = std::stoi(argv[5]);
+    size_t mem_length = std::stoi(argv[4]);
+    size_t min_occ = std::stoi(argv[5]);
 
 #if TIME
     auto time1 = chrono::high_resolution_clock::now();
@@ -32,21 +32,28 @@ int main(int argc, char **argv) {
 
     // r_index.initialize_complement_table();
 
-//     FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
-//     auto forw = r_index.forward_extend(bint, 'A');
-//     forw = r_index.forward_extend(forw, 'C');
-//     forw = r_index.forward_extend(forw, 'A');
-//     forw = r_index.forward_extend(forw, 'G');
-//
-//
-//     // print forw
-//     std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
-//     auto back = r_index.backward_extend(bint, 'G');
-//
-//     back = r_index.backward_extend(back, 'A');
-//     back = r_index.backward_extend(back, 'C');
-//     back = r_index.backward_extend(back, 'A');
-//    std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;
+     FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
+     auto forw = r_index.forward_extend(bint, 'A');
+     forw = r_index.forward_extend(forw, 'C');
+     forw = r_index.forward_extend(forw, 'A');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+     forw = r_index.forward_extend(forw, 'G');
+
+
+     // print forw
+     std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
+     auto back = r_index.backward_extend(bint, 'G');
+
+     back = r_index.backward_extend(back, 'A');
+     back = r_index.backward_extend(back, 'C');
+     back = r_index.backward_extend(back, 'A');
+    std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;
     // exit(0);
 
 

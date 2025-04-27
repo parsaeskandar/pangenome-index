@@ -867,13 +867,13 @@ indexType(const FastLocate &) {
 
 // Backward extension from Algorithm 2 from Li's paper: doi:10.1093/bioinformatics/bts280
 FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
-    int64_t k = bint.forward;
-    int64_t k_prime = bint.reverse;
-    int64_t s = bint.size;
+    size_t k = bint.forward;
+    size_t k_prime = bint.reverse;
+    size_t s = bint.size;
     std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'T', 'N'};
     int64_t b = 0;
     while (nuc[b] < this->complement(a)) {
-        k_prime += this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b]));
+        k_prime += (this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
         b++;
     }
 

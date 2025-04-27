@@ -608,32 +608,33 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 }
 
     struct MEM {
-        int64_t start;
-        int64_t end;
-        int64_t bwt_start;
-        int64_t size;
+        size_t start;
+        size_t end;
+        size_t bwt_start;
+        size_t size;
         // int64_t size;
         // FastLocate::bi_interval bi_interval;
     };
 
-    int64_t find_mems_function(const std::string& pattern, int64_t min_len, int64_t min_occ, int64_t x,
+    int64_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
                          FastLocate& fmd_index, std::vector<MEM>& output) {
 
-        int64_t i, j;
-        int64_t len = pattern.length();
+        size_t i, j;
+        size_t len = pattern.length();
         if (len - x < min_len) return len;
 
         // Step 1: initial interval from P[x + min_len - 1]
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
         // bint = fmd_index.backward_extend(bint, pattern[x + min_len - 1]);
-        // std::cerr << "here" << std::endl;
+         std::cerr << "here" << std::endl;
         for (j = x + min_len - 1; j >= x; --j) {
             bint = fmd_index.backward_extend(bint, pattern[j]);
             if (bint.size < min_occ) {
                 return j + 1;
             }
+            if (j == 0) break;
         }
-        // std::cerr << "here2" << std::endl;
+         std::cerr << "here2" << std::endl;
         // if (i >= x) return i + 1;
         // std::cerr << "here21234" << std::endl;
         // Step 2: forward extension from P[x + min_len]
@@ -660,7 +661,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         //     ++j;
         // }
 
-    //    std::cerr << "Finished extending forward at " << j << std::endl;
+        std::cerr << "Finished extending forward at " << j << std::endl;
         // std::cerr << "here3" << std::endl;
         // Report the MEM [x, j)
         auto e = j;
@@ -682,10 +683,10 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
     }
 
 
-    std::vector<MEM> find_all_mems(const std::string& pattern, int64_t min_len, int64_t min_occ, FastLocate& fmd_index) {
+    std::vector<MEM> find_all_mems(const std::string& pattern, size_t min_len, size_t min_occ, FastLocate& fmd_index) {
         std::vector<MEM> mems;
         int64_t x = 0;
-        int64_t len = pattern.length();
+        size_t len = pattern.length();
 
 
         while (x < len){

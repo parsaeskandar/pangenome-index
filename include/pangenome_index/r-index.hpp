@@ -108,9 +108,9 @@ namespace panindexer {
 
 
         struct bi_interval {
-            int64_t forward; // k
-            int64_t reverse; // l
-            int64_t size; // s
+            size_t forward; // k
+            size_t reverse; // l
+            size_t size; // s
 
             bi_interval() = default;
             bi_interval(size_type fwd, size_type rev, size_type sz) : forward(fwd), reverse(rev), size(sz) {}
