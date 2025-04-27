@@ -868,37 +868,25 @@ indexType(const FastLocate &) {
 // Backward extension from Algorithm 2 from Li's paper: doi:10.1093/bioinformatics/bts280
 FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
     int64_t k = bint.forward;
-    int64_t l = bint.reverse;
+    int64_t k_prime = bint.reverse;
     int64_t s = bint.size;
     std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'T', 'N'};
-
-
-    std::vector<size_t> k_vec;
-    k_vec.resize(6);
-    std::vector<size_t> s_vec;
-    s_vec.resize(6);
-    std::vector<size_t> l_vec;
-    l_vec.resize(6);
-
-
-
-//    std::cerr << this->C[this->sym_map[nuc[5]]] << std::endl;
-// TODO: this doesn't go higher than 6?
-    for (int b = 0; b < 5; b++){
-        int64_t occ_b_k = this->rankAt(k, nuc[b]);
-        k_vec[b] = this->C[this->sym_map[nuc[b]]] + occ_b_k;
-        int64_t occ_b_ks = this->rankAt(k + s, nuc[b]);
-        s_vec[b] = occ_b_ks - occ_b_k;
-
+    int64_t b = 0;
+    while (nuc[b] < this->complement(a)) {
+        k_prime += this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b]));
+        b++;
     }
-    l_vec[0] = l;
-    l_vec[4] = l_vec[0] + s_vec[0];
 
-    for (int b = 3; b > 0; b--){
-        l_vec[b] = l_vec[b+1] + s_vec[b+1];
-    }
-    l_vec[5] = l_vec[1] + s_vec[1];
-    return bi_interval(k_vec[sym_map[a]], l_vec[sym_map[a]], s_vec[sym_map[a]]);
+    // Step 1: For all b < a, update k'
+    // for (size_t b = 0; b < nuc.size(); ++b) {
+    //     if (nuc[b] == this->complement(a)) break; // Only sum for b < a
+    //     k_prime += this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b]));
+    // }
+    // Step 2: s = π_B(a, k+s) - π_B(a, k)
+    s = this->rankAt(k + s, a) - this->rankAt(k, a);
+    // Step 3: k = π_B(a, k)
+    k = this->rankAt(k, a) + this->C[this->sym_map[a]];
+    return bi_interval(k, k_prime, s);
 }
 
 

@@ -97,7 +97,8 @@ int main(int argc, char **argv) {
         // Print results for this read
         std::cout << "Seq: " << i << std::endl;
         for (const auto& mem : mems) {
-            std::cout << "MEM START: " << mem.start << ", MEM END: " << mem.end + 1 << " OCC " << mem.bi_interval.size << std::endl;
+            // std::cout << "MEM START: " << mem.start << ", MEM END: " << mem.end + 1 << " OCC " << mem.bi_interval.size << std::endl;
+            std::cout << "MEM START: " << mem.start << ", MEM END: " << mem.end << " BWT START: " << mem.bwt_start << " SIZE: " << mem.size << std::endl;
 //            std::cout << "BWT interval start: " << mem.bi_interval.forward << ", size: " << mem.bi_interval.size << std::endl;
 
             size_t tag_nums = 0;
@@ -108,7 +109,7 @@ int main(int argc, char **argv) {
 
 
             // Query the tag array for this MEM
-            tag_array.query_compressed(mem.bi_interval.forward, mem.bi_interval.forward + mem.bi_interval.size, tag_nums);
+            // tag_array.query_compressed(mem.bi_interval.forward, mem.bi_interval.forward + mem.bi_interval.size, tag_nums);
 
 #if TIME
             auto time7 = chrono::high_resolution_clock::now();
