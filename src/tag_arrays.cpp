@@ -732,9 +732,9 @@ namespace panindexer {
 
         std::cout << "Number of unique positions: " << unique_positions.size() << std::endl;
         // print the unique positions
-        for (auto pos : unique_positions) {
-            std::cout << pos << std::endl;
-        }
+//        for (auto pos : unique_positions) {
+//            std::cout << pos << std::endl;
+//        }
 
     }
 

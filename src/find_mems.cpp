@@ -14,8 +14,8 @@ int main(int argc, char **argv) {
     string r_index_file = argv[1];
     string tag_array_index = argv[2];
     string reads_file = argv[3];
-    int mem_length = std::stoi(argv[4]);
-    int min_occ = std::stoi(argv[5]);
+    int64_t mem_length = std::stoi(argv[4]);
+    int64_t min_occ = std::stoi(argv[5]);
 
 #if TIME
     auto time1 = chrono::high_resolution_clock::now();
@@ -32,12 +32,21 @@ int main(int argc, char **argv) {
 
     // r_index.initialize_complement_table();
 
-    // FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
-    // auto forw = r_index.forward_extend(bint, 'A');
-    // // print forw
-    // std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
-    // auto back = r_index.backward_extend(bint, 'T');
-    // std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;  
+//     FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
+//     auto forw = r_index.forward_extend(bint, 'A');
+//     forw = r_index.forward_extend(forw, 'C');
+//     forw = r_index.forward_extend(forw, 'A');
+//     forw = r_index.forward_extend(forw, 'G');
+//
+//
+//     // print forw
+//     std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
+//     auto back = r_index.backward_extend(bint, 'G');
+//
+//     back = r_index.backward_extend(back, 'A');
+//     back = r_index.backward_extend(back, 'C');
+//     back = r_index.backward_extend(back, 'A');
+//    std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;
     // exit(0);
 
 
@@ -66,8 +75,10 @@ int main(int argc, char **argv) {
     }
 
     std::string read;
+    int i = 0;
     while (std::getline(reads, read)) {
         if (read.empty()) continue;
+        i++;
 
 #if TIME
         auto time4 = chrono::high_resolution_clock::now();
@@ -80,20 +91,21 @@ int main(int argc, char **argv) {
         auto time5 = chrono::high_resolution_clock::now();
         std::chrono::duration<double> duration3 = time5 - time4;
         total_mem_time += duration3.count();
-        std::cerr << "Finding MEMs took " << duration3.count() << " seconds" << std::endl;
+//        std::cerr << "Finding MEMs took " << duration3.count() << " seconds" << std::endl;
 #endif
 
         // Print results for this read
-        std::cout << "Read: " << read << std::endl;
+        std::cout << "Seq: " << i << std::endl;
         for (const auto& mem : mems) {
-            std::cout << "MEM position: " << mem.start << ", length: " << mem.size << std::endl;
-            std::cout << "BWT interval start: " << mem.bi_interval.forward << ", size: " << mem.bi_interval.size << std::endl;
+            std::cout << "MEM START: " << mem.start << ", MEM END: " << mem.end + 1 << " OCC " << mem.bi_interval.size << std::endl;
+//            std::cout << "BWT interval start: " << mem.bi_interval.forward << ", size: " << mem.bi_interval.size << std::endl;
 
             size_t tag_nums = 0;
 
 #if TIME
             auto time6 = chrono::high_resolution_clock::now();
 #endif
+
 
             // Query the tag array for this MEM
             tag_array.query_compressed(mem.bi_interval.forward, mem.bi_interval.forward + mem.bi_interval.size, tag_nums);
@@ -102,7 +114,7 @@ int main(int argc, char **argv) {
             auto time7 = chrono::high_resolution_clock::now();
             std::chrono::duration<double> duration4 = time7 - time6;
             total_tag_time += duration4.count();
-            std::cerr << "Querying tag array took " << duration4.count() << " seconds" << std::endl;
+//            std::cerr << "Querying tag array took " << duration4.count() << " seconds" << std::endl;
 #endif
         }
         std::cout << std::endl;
@@ -111,8 +123,8 @@ int main(int argc, char **argv) {
     reads.close();
 
 #if TIME
-    std::cerr << "\nTotal time for finding all MEMs: " << total_mem_time << " seconds" << std::endl;
-    std::cerr << "Total time for all tag queries: " << total_tag_time << " seconds" << std::endl;
+    std::cout << "\nTotal time for finding all MEMs: " << total_mem_time << " seconds" << std::endl;
+    std::cout << "Total time for all tag queries: " << total_tag_time << " seconds" << std::endl;
 #endif
 }
 

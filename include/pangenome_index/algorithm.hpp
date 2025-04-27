@@ -614,7 +614,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         FastLocate::bi_interval bi_interval;
     };
 
-    size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, int64_t x,
+    size_t find_mems_function(const std::string& pattern, int64_t min_len, int64_t min_occ, int64_t x,
                          FastLocate& fmd_index, std::vector<MEM>& output) {
 
         int64_t i, j;
@@ -623,12 +623,14 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
         // Step 1: initial interval from P[x + min_len - 1]
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
+        bint = fmd_index.backward_extend(bint, pattern[x + min_len - 1]);
         // std::cerr << "here" << std::endl;
-        for (i = x + min_len - 1; i >= (int64_t)x; --i) {
-            bint = fmd_index.backward_extend(bint, pattern[i]);
+        for (i = x + min_len - 2; i >= x; --i) {
+            FastLocate::bi_interval temp = fmd_index.backward_extend(bint, pattern[i]);
             if (bint.size < min_occ) {
                 break; // no MEM at x
             }
+            bint = temp;
         }
         // std::cerr << "here2" << std::endl;
         if (i >= x) return i + 1;
@@ -667,21 +669,27 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         
         for (i = j - 1; i > x; --i) {
             back = fmd_index.backward_extend(back, pattern[i]);
-            if (back.size < min_occ || back.size == 0) break;
+            if (back.size < min_occ) break;
         }
 
         return i + 1;
     }
 
 
-    std::vector<MEM> find_all_mems(const std::string& pattern, size_t min_len, size_t min_occ, FastLocate& fmd_index) {
+    std::vector<MEM> find_all_mems(const std::string& pattern, int64_t min_len, int64_t min_occ, FastLocate& fmd_index) {
         std::vector<MEM> mems;
         int64_t x = 0;
+        int64_t len = pattern.length();
 
 
-        do {
+        while (x < len){
             x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
-        } while (x < pattern.length());
+        }
+
+
+//        do {
+//            x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
+//        } while (x < len);
 
         return mems;
     }
