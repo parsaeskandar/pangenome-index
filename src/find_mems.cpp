@@ -30,31 +30,40 @@ int main(int argc, char **argv) {
         std::exit(EXIT_FAILURE);
     }
 
-    // r_index.initialize_complement_table();
-
-     FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
-     auto forw = r_index.forward_extend(bint, 'A');
-     forw = r_index.forward_extend(forw, 'C');
-     forw = r_index.forward_extend(forw, 'A');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
-     forw = r_index.forward_extend(forw, 'G');
 
 
-     // print forw
-     std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
-     auto back = r_index.backward_extend(bint, 'G');
-
-     back = r_index.backward_extend(back, 'A');
-     back = r_index.backward_extend(back, 'C');
-     back = r_index.backward_extend(back, 'A');
-    std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;
-    // exit(0);
+//    std::cerr << "sym map " << (int) r_index.sym_map[NENDMARKER] << endl;
+//    std::cerr << "sym map " << (int) r_index.sym_map['A'] << endl;
+//    std::cerr << "sym map " << (int) r_index.sym_map['C'] << endl;
+//    std::cerr << "sym map " << (int) r_index.sym_map['G'] << endl;
+//    std::cerr << "sym map " << (int) r_index.sym_map['T'] << endl;
+//    std::cerr << "sym map " << (int) r_index.sym_map['N'] << endl;
+//
+//    // r_index.initialize_complement_table();
+//
+//     FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
+//     auto forw = r_index.forward_extend(bint, 'A');
+//     forw = r_index.forward_extend(forw, 'C');
+//     forw = r_index.forward_extend(forw, 'A');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//     forw = r_index.forward_extend(forw, 'G');
+//
+//
+//     // print forw
+//     std::cerr << "forward: " << forw.forward << " size: " << forw.size << " reverse: " << forw.reverse << std::endl;
+//     auto back = r_index.backward_extend(bint, 'G');
+//
+//     back = r_index.backward_extend(back, 'A');
+//     back = r_index.backward_extend(back, 'C');
+//     back = r_index.backward_extend(back, 'A');
+//     std::cerr << "backward: " << back.forward << " size: " << back.size << " reverse: " << back.reverse << std::endl;
+//     exit(0);
 
 
 #if TIME
@@ -116,7 +125,7 @@ int main(int argc, char **argv) {
 
 
             // Query the tag array for this MEM
-            // tag_array.query_compressed(mem.bi_interval.forward, mem.bi_interval.forward + mem.bi_interval.size, tag_nums);
+             tag_array.query_compressed(mem.bwt_start, mem.bwt_start + mem.size, tag_nums);
 
 #if TIME
             auto time7 = chrono::high_resolution_clock::now();

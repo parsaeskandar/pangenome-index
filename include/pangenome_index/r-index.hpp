@@ -110,7 +110,7 @@ namespace panindexer {
         struct bi_interval {
             size_t forward; // k
             size_t reverse; // l
-            size_t size; // s
+            int64_t size; // s
 
             bi_interval() = default;
             bi_interval(size_type fwd, size_type rev, size_type sz) : forward(fwd), reverse(rev), size(sz) {}

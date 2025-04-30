@@ -282,6 +282,8 @@ namespace panindexer {
 
 
 
+
+
     // TODO: optimize for the ranges that are in the same or adjacent blocks
     range_type FastLocate::LF(range_type range, size_t sym, bool &starts_with_to, size_t &first_run) const {
 
@@ -869,11 +871,30 @@ indexType(const FastLocate &) {
 FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
     size_t k = bint.forward;
     size_t k_prime = bint.reverse;
-    size_t s = bint.size;
-    std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'T', 'N'};
+    int64_t s = bint.size;
+    std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'N', 'T'};
     int64_t b = 0;
+
+//    for (auto &c: nuc){
+//        std::cerr << this->C[this->sym_map[c]] << std::endl;
+//    }
+//    while (nuc[b] < this->complement(a)) {
+//        if (k == 0){
+//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])));
+//        } else {
+//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])) - this->rankAt(k - 1, this->complement(nuc[b])));
+//        }
+//
+//        b++;
+//    }
+
     while (nuc[b] < this->complement(a)) {
-        k_prime += (this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
+//        if (k == 0){
+//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])));
+//        } else {
+            k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
+//        }
+
         b++;
     }
 
@@ -883,14 +904,58 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
     //     k_prime += this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b]));
     // }
     // Step 2: s = π_B(a, k+s) - π_B(a, k)
-    s = this->rankAt(k + s, a) - this->rankAt(k, a);
+//    if (k == 0){
+//        s = this->rankAt(k + s - 1, a);
+//    } else {
+        s = this->rankAt(k + s, a) - this->rankAt(k, a);
+//    }
     // Step 3: k = π_B(a, k)
-    k = this->rankAt(k, a) + this->C[this->sym_map[a]];
+
+//    if (k == 0){
+//        k = this->C[this->sym_map[a]];
+//    } else {
+        k = this->rankAt(k, a) + this->C[this->sym_map[a]];
+//    }
     return bi_interval(k, k_prime, s);
 }
 
-
-
+//FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
+//    size_t k = bint.forward;
+//    size_t l = bint.reverse;
+//    int64_t s = bint.size;
+//    std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'N', 'T'};
+//
+//
+//    std::vector<size_t> k_vec;
+//    k_vec.resize(6);
+//    std::vector<size_t> s_vec;
+//    s_vec.resize(6);
+//    std::vector<size_t> l_vec;
+//    l_vec.resize(6);
+//
+//
+//
+////    std::cerr << this->C[this->sym_map[nuc[5]]] << std::endl;
+//// TODO: this doesn't go higher than 6?
+//    for (int b = 0; b < this->C.size() ; b++){
+//        size_t occ_b_k = this->rankAt(k, nuc[b]);
+//        k_vec[b] = this->C[this->sym_map[nuc[b]]] + occ_b_k;
+//        size_t occ_b_ks = this->rankAt(k + s, nuc[b]);
+//        s_vec[b] = occ_b_ks - occ_b_k;
+//
+//    }
+//    l_vec[0] = l;
+//    l_vec[4] = l_vec[0] + s_vec[0];
+//
+//    for (int b = 3; b > 0; b--){
+//        l_vec[b] = l_vec[b+1] + s_vec[b+1];
+//    }
+//    l_vec[5] = l_vec[1] + s_vec[1];
+//    return bi_interval(k_vec[sym_map[a]], l_vec[sym_map[a]], s_vec[sym_map[a]]);
+//}
+//
+//
+//
 FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) {
     bi_interval tmp = bi_interval(bint.reverse, bint.forward, bint.size);
     // print tmp

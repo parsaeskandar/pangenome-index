@@ -611,12 +611,12 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         size_t start;
         size_t end;
         size_t bwt_start;
-        size_t size;
+        int64_t size;
         // int64_t size;
-        // FastLocate::bi_interval bi_interval;
+        // FastLocate::bi_interval bi_intervax;
     };
 
-    int64_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
+    size_t find_mems_function(const std::string& pattern, size_t min_len, size_t min_occ, size_t x,
                          FastLocate& fmd_index, std::vector<MEM>& output) {
 
         size_t i, j;
@@ -626,15 +626,16 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         // Step 1: initial interval from P[x + min_len - 1]
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
         // bint = fmd_index.backward_extend(bint, pattern[x + min_len - 1]);
-         std::cerr << "here" << std::endl;
+//         std::cerr << "here" << std::endl;
         for (j = x + min_len - 1; j >= x; --j) {
             bint = fmd_index.backward_extend(bint, pattern[j]);
+//            std::cerr << j << " " << (char) pattern[j] << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
             if (bint.size < min_occ) {
                 return j + 1;
             }
             if (j == 0) break;
         }
-         std::cerr << "here2" << std::endl;
+//         std::cerr << "here2" << std::endl;
         // if (i >= x) return i + 1;
         // std::cerr << "here21234" << std::endl;
         // Step 2: forward extension from P[x + min_len]
@@ -644,8 +645,9 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         FastLocate::bi_interval bint2 = bint;
         for (j = x + min_len; j < len; ++j) {
 //            auto comp = fmd_index.complement(pattern[j]);
-            
+
             bint = fmd_index.forward_extend(bint, pattern[j]);
+//            std::cerr << j << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
 
             // std::cerr << "next.size: " << next.size << " next " << std::endl;
             if (bint.size < min_occ) break;
@@ -661,7 +663,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         //     ++j;
         // }
 
-        std::cerr << "Finished extending forward at " << j << std::endl;
+//        std::cerr << "Finished extending forward at " << j << std::endl;
         // std::cerr << "here3" << std::endl;
         // Report the MEM [x, j)
         auto e = j;
@@ -685,7 +687,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
     std::vector<MEM> find_all_mems(const std::string& pattern, size_t min_len, size_t min_occ, FastLocate& fmd_index) {
         std::vector<MEM> mems;
-        int64_t x = 0;
+        size_t x = 0;
         size_t len = pattern.length();
 
 
