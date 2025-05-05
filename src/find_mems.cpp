@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
 
 
             // Query the tag array for this MEM
-             tag_array.query_compressed(mem.bwt_start, mem.bwt_start + mem.size, tag_nums);
+             tag_array.query_compressed(mem.bwt_start, mem.bwt_start + mem.size - 1, tag_nums);
 
 #if TIME
             auto time7 = chrono::high_resolution_clock::now();

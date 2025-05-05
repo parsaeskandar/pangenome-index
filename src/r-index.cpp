@@ -267,7 +267,7 @@ namespace panindexer {
 
 
     // current_position Tracks how far we've gone through the BWT
-    // The number includes the index symbol too
+    // The number does not include the index symbol
     size_t FastLocate::rankAt(size_t pos, size_t symbol, size_t &run_id, size_t &current_position) const {
 
         auto iter = this->blocks_start_pos.predecessor(pos);
@@ -278,6 +278,19 @@ namespace panindexer {
         current_position = iter->second + cur_pos;
         auto cumulative_rank = cum_rank + this->blocks[iter->first].get_cum_ranks()[this->sym_map[symbol]];
         return cumulative_rank;
+    }
+
+
+    std::vector<size_t> FastLocate::rank_at_cached(size_t pos) const {
+        auto iter = this->blocks_start_pos.predecessor(pos);
+        std::vector<size_t> rank_vec(this->C.size(), 0);
+        for (size_t i = 0; i < this->C.size(); i++) {
+            size_t run_num = 0;
+            size_t cur_pos = 0;
+            auto cum_rank = this->blocks[iter->first].rankAt(pos - iter->second, nuc[i], run_num, cur_pos);
+            rank_vec[i] = cum_rank + this->blocks[iter->first].get_cum_ranks()[this->sym_map[nuc[i]]];
+        }
+        return rank_vec;
     }
 
 
@@ -872,52 +885,67 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
     size_t k = bint.forward;
     size_t k_prime = bint.reverse;
     int64_t s = bint.size;
-    std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'N', 'T'};
     int64_t b = 0;
 
-//    for (auto &c: nuc){
-//        std::cerr << this->C[this->sym_map[c]] << std::endl;
-//    }
-//    while (nuc[b] < this->complement(a)) {
-//        if (k == 0){
-//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])));
-//        } else {
-//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])) - this->rankAt(k - 1, this->complement(nuc[b])));
-//        }
-//
-//        b++;
-//    }
+    auto rank_cache_ks = rank_at_cached(k + s);
+    auto rank_cache_k = rank_at_cached(k);
 
     while (nuc[b] < this->complement(a)) {
-//        if (k == 0){
-//            k_prime += (this->rankAt(k + s - 1, this->complement(nuc[b])));
-//        } else {
-            k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
-//        }
 
+        k_prime += (rank_cache_ks[this->sym_map[this->complement(nuc[b])]] - rank_cache_k[this->sym_map[this->complement(nuc[b])]]);
+
+//        k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
         b++;
     }
 
-    // Step 1: For all b < a, update k'
-    // for (size_t b = 0; b < nuc.size(); ++b) {
-    //     if (nuc[b] == this->complement(a)) break; // Only sum for b < a
-    //     k_prime += this->rankAt(k + s, this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b]));
-    // }
-    // Step 2: s = π_B(a, k+s) - π_B(a, k)
-//    if (k == 0){
-//        s = this->rankAt(k + s - 1, a);
-//    } else {
-        s = this->rankAt(k + s, a) - this->rankAt(k, a);
-//    }
-    // Step 3: k = π_B(a, k)
+//    auto rank_ks = this->rankAt(k + s, a);
+//    auto rank_k = this->rankAt(k, a);
 
-//    if (k == 0){
-//        k = this->C[this->sym_map[a]];
-//    } else {
-        k = this->rankAt(k, a) + this->C[this->sym_map[a]];
-//    }
+    auto rank_ks = rank_cache_ks[this->sym_map[a]];
+    auto rank_k = rank_cache_k[this->sym_map[a]];
+
+    if (rank_k >= rank_ks) {
+        return bi_interval(0, 0, 0);
+    }
+
+    s = rank_ks - rank_k;
+
+    k = rank_k + this->C[this->sym_map[a]];
     return bi_interval(k, k_prime, s);
 }
+
+//FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
+//    size_t k = bint.forward;
+//    size_t k_prime = bint.reverse;
+//    int64_t s = bint.size;
+//    int64_t b = 0;
+//
+////    auto rank_cache_ks = rank_at_cached(k + s);
+////    auto rank_cache_k = rank_at_cached(k);
+//
+//    while (nuc[b] < this->complement(a)) {
+//
+////        k_prime += (rank_cache_ks[b] - rank_cache_k[b]);
+//
+//        k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
+//        b++;
+//    }
+//
+//    auto rank_ks = this->rankAt(k + s, a);
+//    auto rank_k = this->rankAt(k, a);
+//
+////    auto rank_ks = rank_cache_ks[this->sym_map[a]];
+////    auto rank_k = rank_cache_k[this->sym_map[a]];
+//
+//    if (rank_k >= rank_ks) {
+//        return bi_interval(0, 0, 0);
+//    }
+//
+//    s = rank_ks - rank_k;
+//
+//    k = rank_k + this->C[this->sym_map[a]];
+//    return bi_interval(k, k_prime, s);
+//}
 
 //FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
 //    size_t k = bint.forward;

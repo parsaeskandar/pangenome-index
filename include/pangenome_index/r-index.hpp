@@ -547,6 +547,11 @@ namespace panindexer {
             return rankAt(pos, symbol, run_id, current_position);
         };
 
+
+
+        // this function returns the rank of the symbol at the ps
+        std::vector<size_t> rank_at_cached(size_t pos) const;
+
         size_type getSample(size_type run_id) const {
             return this->samples[run_id];
         }

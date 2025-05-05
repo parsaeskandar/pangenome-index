@@ -8,6 +8,8 @@
 namespace panindexer {
     constexpr char NENDMARKER = '\n';
 
+    const std::vector<char> nuc = {NENDMARKER, 'A', 'C', 'G', 'N', 'T'};
+
 }
 
 #endif //PANGENOME_INDEX_UTILS_HPP

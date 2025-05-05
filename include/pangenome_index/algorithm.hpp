@@ -630,7 +630,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         for (j = x + min_len - 1; j >= x; --j) {
             bint = fmd_index.backward_extend(bint, pattern[j]);
 //            std::cerr << j << " " << (char) pattern[j] << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
-            if (bint.size < min_occ) {
+            if (bint.size < min_occ || bint.size <= 0) {
                 return j + 1;
             }
             if (j == 0) break;
@@ -650,7 +650,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 //            std::cerr << j << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
 
             // std::cerr << "next.size: " << next.size << " next " << std::endl;
-            if (bint.size < min_occ) break;
+            if (bint.size < min_occ || bint.size <= 0) break;
             bint2 = bint;
 
             // std::cerr << "Forward extension" << std::endl;
@@ -678,7 +678,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         
         for (j = e ; j > x; --j) {
             back = fmd_index.backward_extend(back, pattern[j]);
-            if (back.size < min_occ) return j+1;
+            if (back.size < min_occ || back.size <= 0) return j+1;
         }
 
         return j + 1;
