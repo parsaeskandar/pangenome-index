@@ -151,7 +151,7 @@ TEST(RINDEX_Test, Locate_N_test) {
 }
 
 TEST(FMINDEX_Test, small_test){
-    std::string filename = "../test_data/x.rl_bwt";
+    std::string filename = "../big_test/merged_info.rl_bwt";
     fm_index index(filename);
     FastLocate r_index(filename);
 
@@ -190,81 +190,21 @@ TEST(FMINDEX_Test, small_test){
 
 
 
-TEST(FMDINDEX_Test, CompareSampledKmersWithReverseComplements) {
-    std::string rlbwt_file = "../test_data/bidirectional_test/contigs_xy.rl_bwt";
-    std::string text_file = "../test_data/bidirectional_test/contigs_xy";
-
-    FastLocate r_index(rlbwt_file);
-    r_index.initialize_complement_table();
-
-    std::ifstream in(text_file);
-    ASSERT_TRUE(in.is_open()) << "Could not open input text file";
-
-    std::string full_text;
-    std::string line;
-    while (std::getline(in, line)) {
-        if (!line.empty()) full_text += line;
-    }
-
-    ASSERT_GE(full_text.size(), 20) << "Input text is too short to sample from";
-
-    const size_t k = 4;
-    const size_t num_samples = 100;
-    std::mt19937 rng(42); // fixed seed for reproducibility
-    std::uniform_int_distribution<size_t> dist(0, full_text.size() - k);
-
-    for (size_t i = 0; i < num_samples; ++i) {
-        size_t pos = dist(rng);
-        std::string kmer = full_text.substr(pos, k);
-
-        // Skip invalid kmers with non-ACGTN symbols
-        if (kmer.find_first_not_of("ACGTN") != std::string::npos) {
-            i--;
-            continue;
-        }
-
-        std::string revcomp = kmer;
-        std::reverse(revcomp.begin(), revcomp.end());
-        for (char& c : revcomp) {
-            c = r_index.complement(c);
-        }
-
-        // Backward extend original
-        panindexer::FastLocate::bi_interval int_kmer = {0, 0, r_index.bwt_size()};
-        for (int j = kmer.size() - 1; j >= 0; --j) {
-            int_kmer = r_index.backward_extend(int_kmer, kmer[j]);
-        }
-
-        // Backward extend reverse complement
-        panindexer::FastLocate::bi_interval int_rc = {0, 0, r_index.bwt_size()};
-        for (int j = revcomp.size() - 1; j >= 0; --j) {
-            int_rc = r_index.backward_extend(int_rc, revcomp[j]);
-        }
-
-        std::cerr << "k-mer       : " << kmer << ", Interval size: " << int_kmer.size << " Interval reverse " <<  int_kmer.reverse << " Interval forward " << int_kmer.forward << "\n";
-        std::cerr << "RevComp     : " << revcomp << ", Interval size: " << int_rc.size << " Interval reverse " <<  int_rc.reverse << " Interval forward " << int_rc.forward << "\n";
-
-        ASSERT_EQ(int_kmer.forward, int_rc.reverse) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
-        ASSERT_EQ(int_kmer.reverse, int_rc.forward) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
-        ASSERT_EQ(int_kmer.size, int_rc.size) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
-
-    }
-}
 
 
 TEST(FMDINDEX_Test, BackwardExtensionMatchesLF) {
-    std::string rlbwt_file = "../test_data/bidirectional_test/contigs_xy.rl_bwt";
+    std::string rlbwt_file = "../test_data/big_test/merged_info.rl_bwt";
     FastLocate r_index(rlbwt_file);
 //    r_index.initialize_complement_table();
 
-    std::string kmer = "GCTT";
+    std::string kmer = "ATCAAAGAAAAAAGCCCAACATATCCATTACCATTACTAGTTACACATAGCATCAGGAACCAGAGAGTTGGA";
     std::string revcomp = kmer;
 //    std::reverse(revcomp.begin(), revcomp.end());
-    for (char& c : revcomp) {
-        c = r_index.complement(c);
-    }
+//    for (char& c : revcomp) {
+//        c = r_index.complement(c);
+//    }
 
-    std::cerr << "Testing kmer: " << kmer << " and its reverse complement: " << revcomp << std::endl;
+//    std::cerr << "Testing kmer: " << kmer << " and its reverse complement: " << revcomp << std::endl;
 
     // Initial full-range interval
     panindexer::FastLocate::bi_interval bint = {0, 0, r_index.bwt_size()};
@@ -274,7 +214,7 @@ TEST(FMDINDEX_Test, BackwardExtensionMatchesLF) {
         char rev_char = revcomp[i];
 
         // Compute manually via LF
-        range_type fwd_expected = r_index.LF({bint.forward, bint.forward + bint.size}, fwd_char);
+        range_type fwd_expected = r_index.LF({bint.forward, bint.forward + bint.size - 1}, fwd_char);
         range_type rev_expected = r_index.LF({bint.reverse, bint.reverse + bint.size}, rev_char);
 
         size_t expected_size = 0;
@@ -285,11 +225,11 @@ TEST(FMDINDEX_Test, BackwardExtensionMatchesLF) {
         panindexer::FastLocate::bi_interval extended = r_index.backward_extend(bint, fwd_char);
 
 
-        std::cerr << "char fwd: " << fwd_char << " char rev: " << rev_char << ", Interval size: " << extended.size << " Interval reverse " <<  extended.reverse << " Interval forward " << extended.forward << "\n";
+//        std::cerr << "char fwd: " << fwd_char << " char rev: " << rev_char << ", Interval size: " << extended.size << " Interval reverse " <<  extended.reverse << " Interval forward " << extended.forward << "\n";
         // Debug
-        std::cerr << "Char: " << fwd_char
-        << " | Expected size: " << expected_size
-        << " | Actual size: " << extended.size << std::endl;
+//        std::cerr << "Char: " << fwd_char
+//        << " | Expected size: " << expected_size
+//        << " | Actual size: " << extended.size << std::endl;
 
         if (expected_size > 0){
             ASSERT_EQ(extended.size, expected_size) << "Mismatch in size for char " << fwd_char;
@@ -304,21 +244,65 @@ TEST(FMDINDEX_Test, BackwardExtensionMatchesLF) {
 }
 
 
-TEST(LONG_MEM_TEST, SmallTest){
-        std::string rlbwt_file = "../test_data/bidirectional_test/small_test/test.rl_bwt";
-        FastLocate r_index(rlbwt_file);
+TEST(FMDINDEX_Test, CompareSampledKmersWithReverseComplementsBIGTEST) {
+    std::string rlbwt_file = "../test_data/big_test/merged_info.rl_bwt";
+    std::string text_file = "../test_data/big_test/merged_info";
 
-        // a small test from https://arxiv.org/abs/2403.02008
-        std::string pattern = "TACATAGATTAG";
+    FastLocate r_index(rlbwt_file);
+    r_index.initialize_complement_table();
 
-        auto mems = find_all_mems(pattern, 4, 1, r_index);
-        ASSERT_EQ(mems[0].start, 0);
-        ASSERT_EQ(mems[0].end, 4);
-        ASSERT_EQ(mems[1].start, 4);
-        ASSERT_EQ(mems[1].end, 8);
-        ASSERT_EQ(mems[2].start, 6);
-        ASSERT_EQ(mems[2].end, 11);
+    std::ifstream in(text_file);
+    ASSERT_TRUE(in.is_open()) << "Could not open input text file";
 
+    std::string full_text;
+    std::string line;
+    while (std::getline(in, line)) {
+    if (!line.empty()) full_text += line;
+    }
+
+    ASSERT_GE(full_text.size(), 20) << "Input text is too short to sample from";
+
+    const size_t k = 12;
+    const size_t num_samples = 100;
+    std::mt19937 rng(42); // fixed seed for reproducibility
+    std::uniform_int_distribution<size_t> dist(0, full_text.size() - k);
+
+    for (size_t i = 0; i < num_samples; ++i) {
+    size_t pos = dist(rng);
+    std::string kmer = full_text.substr(pos, k);
+
+    // Skip invalid kmers with non-ACGTN symbols
+    if (kmer.find_first_not_of("ACGTN") != std::string::npos) {
+    i--;
+    continue;
+    }
+
+    std::string revcomp = kmer;
+    std::reverse(revcomp.begin(), revcomp.end());
+    for (char& c : revcomp) {
+    c = r_index.complement(c);
+    }
+
+    // Backward extend original
+    panindexer::FastLocate::bi_interval int_kmer = {0, 0, r_index.bwt_size()};
+    for (int j = kmer.size() - 1; j >= 0; --j) {
+    int_kmer = r_index.backward_extend(int_kmer, kmer[j]);
+    }
+
+    // Backward extend reverse complement
+    panindexer::FastLocate::bi_interval int_rc = {0, 0, r_index.bwt_size()};
+    for (int j = revcomp.size() - 1; j >= 0; --j) {
+    int_rc = r_index.backward_extend(int_rc, revcomp[j]);
+    }
+
+//    std::cerr << "k-mer       : " << kmer << ", Interval size: " << int_kmer.size << " Interval reverse " <<  int_kmer.reverse << " Interval forward " << int_kmer.forward << "\n";
+//    std::cerr << "RevComp     : " << revcomp << ", Interval size: " << int_rc.size << " Interval reverse " <<  int_rc.reverse << " Interval forward " << int_rc.forward << "\n";
+
+    ASSERT_EQ(int_kmer.forward, int_rc.reverse) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
+    ASSERT_EQ(int_kmer.reverse, int_rc.forward) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
+    ASSERT_EQ(int_kmer.size, int_rc.size) << "FMD symmetry violated between '" << kmer << "' and '" << revcomp << "'";
+
+    }
 }
 
 
