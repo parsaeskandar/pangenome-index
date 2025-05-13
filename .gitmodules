@@ -1,0 +1,3 @@
+[submodule "deps/grlBWT"]
+	path = deps/grlBWT
+	url = https://github.com/ddiazdom/grlBWT.git
