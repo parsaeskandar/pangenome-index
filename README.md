@@ -20,44 +20,15 @@ A comprehensive toolkit for building and querying pangenome indices using tag ar
 
 ## Dependencies
 
-**⚠️ Important**: The first 4 dependencies require manual installation before building pangenome-index.
-
 ### Required Dependencies
 
-1. **[SDSL](https://github.com/vgteam/sdsl-lite)** (vgteam fork) - For low-level data structures
-   - **Installation**: Clone and build manually
-   ```bash
-   git clone https://github.com/vgteam/sdsl-lite.git
-   cd sdsl-lite
-   make
-   ```
+- **[SDSL](https://github.com/vgteam/sdsl-lite)** (vgteam fork) - For low-level data structures
+- **[GBWT](https://github.com/jltsiren/gbwt)** - For the backend
+- **[GBWTGraph](https://github.com/jltsiren/gbwtgraph)** - For the graph-based backend
+- **[HandleGraph](https://github.com/vgteam/libhandlegraph)** - For the handle graph interface
+- **[grlBWT](https://github.com/ddiazdom/grlBWT)** - For the run-length BWT interface (automatically built during compilation)
 
-2. **[GBWT](https://github.com/jltsiren/gbwt)** - For the backend
-   - **Installation**: Clone and build manually
-   ```bash
-   git clone https://github.com/jltsiren/gbwt.git
-   cd gbwt
-   make
-   ```
-
-3. **[GBWTGraph](https://github.com/jltsiren/gbwtgraph)** - For the graph-based backend
-   - **Installation**: Clone and build manually
-   ```bash
-   git clone https://github.com/jltsiren/gbwtgraph.git
-   cd gbwtgraph
-   make
-   ```
-
-4. **[HandleGraph](https://github.com/vgteam/libhandlegraph)** - For the handle graph interface
-   - **Installation**: Clone and build manually
-   ```bash
-   git clone https://github.com/vgteam/libhandlegraph.git
-   cd libhandlegraph
-   make
-   ```
-
-5. **[grlBWT](https://github.com/ddiazdom/grlBWT)** - For the run-length BWT interface
-   - **Status**: Automatically built during pangenome-index compilation
+Please refer to each dependency's repository for installation instructions.
 
 ### System Dependencies
 
@@ -90,7 +61,7 @@ cd pangenome-index
 # To point to your SDSL installation location
 
 # Build the project
-make
+make -j 8
 ```
 
 The build process will:
@@ -322,7 +293,7 @@ grlbwt-cli -t 8 graph_info
 
 ### query_tags
 
-**Purpose**: Queries the pangenome using tag arrays for k-mer lookups.
+**Purpose**: Queries the pangenome using tag arrays for k-mer lookups. This is for evaluating the performance of finding the k-mers on the tag arrays.
 
 **Input Files Required**:
 - R-index file (`.ri`)
@@ -345,7 +316,7 @@ grlbwt-cli -t 8 graph_info
 **What it does**:
 1. Loads the r-index and tag arrays
 2. Reads query sequences
-3. Extracts k-mers from the sequences
+3. Extracts k-mers from the sequences (Randomly selected)
 4. Performs lookups in the tag arrays
 5. Reports k-mer positions in the pangenome
 
