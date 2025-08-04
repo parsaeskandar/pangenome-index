@@ -187,7 +187,7 @@ project/
 │   ├── chr2.tags
 │   ├── ...
 │   └── chrY.tags
-└── merged_output.tags
+└── whole_genome_tag_array_compressed.tags
 ```
 
 ## Executables
