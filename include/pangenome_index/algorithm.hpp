@@ -354,7 +354,6 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                         // This is non-deterministic, so we skip this extension
                     }
                 }
-            
             }
         }
 
