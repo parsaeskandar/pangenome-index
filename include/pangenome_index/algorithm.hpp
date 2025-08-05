@@ -10,6 +10,7 @@
 #include <queue>
 #include <mutex>
 #include <condition_variable>
+#include <unordered_map>
 #include <omp.h>
 #include <hash_map.hpp>
 #include "bplus_tree.hpp"
@@ -304,40 +305,53 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                             }
                         }
                     } else {
-                        int prev_bases_num = 0;
-                        handle_t prev_node;
-                        char prev_base;
-                        pos_t prev_graph_pos;
-
+                        // Collect all predecessor bases and their corresponding nodes
+                        std::vector<std::pair<char, handle_t>> prev_bases_and_nodes;
+                        
                         graph.follow_edges(current_handle, true, [&](const handle_t &prev) {
-                            prev_bases_num++;
-                            if (prev_bases_num != 1) return false;
-                            prev_base = graph.get_base(prev, graph.get_length(prev) - 1);
-                            prev_node = prev;
-                            return true;
+                            char prev_base = graph.get_base(prev, graph.get_length(prev) - 1);
+                            prev_bases_and_nodes.push_back({prev_base, prev});
+                            return true; // Continue traversing all edges
                         });
 
-                        if (prev_bases_num == 1) {
-                            prev_graph_pos = pos_t{graph.get_id(prev_node), graph.get_is_reverse(prev_node),
-                                                   graph.get_length(prev_node) - 1};
-                            auto new_range = idx.LF(current_interval, prev_base);
-                            if (new_range.first <= new_range.second) {
-                                Run new_run = {new_range.first, gbwtgraph::Position::encode(prev_graph_pos)};
-                                batches[thread_num].push_back({new_run, new_range.second - new_range.first + 1});
+                        // Group by base to identify unique extensions
+                        std::unordered_map<char, std::vector<handle_t>> base_to_nodes;
+                        for (const auto& pair : prev_bases_and_nodes) {
+                            base_to_nodes[pair.first].push_back(pair.second);
+                        }
 
-                                if (batches[thread_num].size() >= batch_size) {
-                                    std::lock_guard <std::mutex> lock(bptree_mutex);
-                                    for (const auto &item: batches[thread_num]) {
-//                                        bptree.insert(item.first, item.second);
-//                                        bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
-                                        if (bptree.insert_success(item.first, item.second)) {
-                                            bfs_queues[thread_num].push(
-                                                    make_pair(item.first, item.second + item.first.start_position));
+                        // Extend for each unique base (avoid non-deterministic situations)
+                        for (const auto& base_group : base_to_nodes) {
+                            char prev_base = base_group.first;
+                            const std::vector<handle_t>& nodes = base_group.second;
+                            
+                            // Only extend if there's exactly one node with this base (deterministic)
+                            if (nodes.size() == 1) {
+                                handle_t prev_node = nodes[0];
+                                pos_t prev_graph_pos = pos_t{graph.get_id(prev_node), graph.get_is_reverse(prev_node),
+                                                           graph.get_length(prev_node) - 1};
+                                
+                                auto new_range = idx.LF(current_interval, prev_base);
+                                if (new_range.first <= new_range.second) {
+                                    Run new_run = {new_range.first, gbwtgraph::Position::encode(prev_graph_pos)};
+                                    batches[thread_num].push_back({new_run, new_range.second - new_range.first + 1});
+
+                                    if (batches[thread_num].size() >= batch_size) {
+                                        std::lock_guard <std::mutex> lock(bptree_mutex);
+                                        for (const auto &item: batches[thread_num]) {
+//                                            bptree.insert(item.first, item.second);
+//                                            bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
+                                            if (bptree.insert_success(item.first, item.second)) {
+                                                bfs_queues[thread_num].push(
+                                                        make_pair(item.first, item.second + item.first.start_position));
+                                            }
                                         }
+                                        batches[thread_num].clear();
                                     }
-                                    batches[thread_num].clear();
                                 }
                             }
+                            // If nodes.size() > 1, we have multiple predecessors with the same base
+                            // This is non-deterministic, so we skip this extension
                         }
                     }
                 }
