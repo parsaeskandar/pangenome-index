@@ -59,11 +59,11 @@ int main(int argc, char **argv) {
     auto time1 = chrono::high_resolution_clock::now();
 #endif
 
-//    // Current (forward strand only)
-//     unique_kmers_parallel<gbwtgraph::Key64>(gbz.graph, index, k);
+   // (forward strand only)
+    unique_kmers_parallel<gbwtgraph::Key64>(gbz.graph, index, k);
 
     // New (both strands)
-    unique_kmers_parallel_complete<gbwtgraph::Key64>(gbz.graph, index, k);
+    // unique_kmers_parallel_complete<gbwtgraph::Key64>(gbz.graph, index, k);
 
     std::cerr << "The number of unique kmers in the index is: " << index.size() << std::endl;
 

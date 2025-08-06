@@ -273,7 +273,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                 pos_t current_pos = current_graph_pos.decode();
 
                 // Get the traversal of the graph position
-                handle_t current_handle = graph.get_handle(id(current_pos), false);
+                handle_t current_handle = graph.get_handle(id(current_pos), is_rev(current_pos));
 
                 // The BWT interval of the current kmer
                 gbwt::range_type current_interval = {current_starting_pos, interval_end - 1};
@@ -441,7 +441,24 @@ void traverse_sequences_parallel(GBZ &gbz, BplusTree <Run> &bptree, FastLocate &
                             gbz.graph.get_is_reverse(current_node),
                             in_node_index + 1
                     };
-                    assert(gbwtgraph::Position::encode(current_pos).value == bptree_search.graph_position.value);
+                    // cerr << "current_pos id" << gbz.graph.get_id(current_node) << " current pos is_rev " << gbz.graph.get_is_reverse(current_node) << " current pos offset " << in_node_index + 1 << " bptree_search.graph_position.value " << bptree_search.graph_position.value << endl;
+                    
+                    auto encoded_current_pos = gbwtgraph::Position::encode(current_pos).value;
+                    if (encoded_current_pos != bptree_search.graph_position.value) {
+                        cerr << "ASSERTION FAILED: Position mismatch!" << endl;
+                        cerr << "  Encoded current_pos.value: " << encoded_current_pos << endl;
+                        cerr << "  bptree_search.graph_position.value: " << bptree_search.graph_position.value << endl;
+                        cerr << "  current_pos details - id: " << gbz.graph.get_id(current_node) 
+                             << ", is_rev: " << gbz.graph.get_is_reverse(current_node) 
+                             << ", offset: " << in_node_index + 1 << endl;
+                        
+                        // Decode bptree_search position
+                        auto decoded_bptree_pos = bptree_search.graph_position.decode();
+                        cerr << "  bptree_search decoded details - id: " << id(decoded_bptree_pos)
+                             << ", is_rev: " << is_rev(decoded_bptree_pos)
+                             << ", offset: " << offset(decoded_bptree_pos) << endl;
+                        assert(false);
+                    }
                 }
             }
         }

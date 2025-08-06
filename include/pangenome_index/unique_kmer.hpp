@@ -146,7 +146,6 @@ namespace panindexer {
         auto hash_kmers = [&](const std::vector <handle_t> &traversal, const std::string &seq) {
             int thread_id = omp_get_thread_num();
             std::vector <kmer_type> kmers = forward_strand_kmers<key_type>(seq, k);
-//        cerr << kmers.size() << endl;
             auto iter = traversal.begin();
             size_t node_start = 0;
 
@@ -237,7 +236,6 @@ namespace panindexer {
         auto hash_kmers = [&](const std::vector <handle_t> &traversal, const std::string &seq) {
             int thread_id = omp_get_thread_num();
             std::vector <kmer_type> kmers = forward_reverse_strand_kmers<key_type>(seq, k);
-//        cerr << kmers.size() << endl;
             auto iter = traversal.begin();
             size_t node_start = 0;
 
