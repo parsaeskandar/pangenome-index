@@ -1,11 +1,6 @@
 //
 // Created by seeskand on 9/18/24.
 //
-
-//
-// Created by seeskand on 9/13/24.
-//
-
 #include "pangenome_index/bplus_tree.hpp"
 #include "pangenome_index/algorithm.hpp"
 #include "pangenome_index/tag_arrays.hpp"
@@ -15,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <fstream>
 #include <omp.h>
 #include <queue>
 #include <mutex>
@@ -40,49 +36,14 @@ std::vector<std::string> readSequencesFromFile(const std::string &filename) {
     return sequences;
 }
 
-
-void sampleKmersFromFile(const std::string &filename, int k, int sampleCount, std::vector<std::string> &kmers) {
-    std::ifstream file(filename);
-    if (!file) {
-        throw std::runtime_error("Error opening file: " + filename);
-    }
-
-    std::default_random_engine generator(static_cast<long unsigned int>(std::time(0)));
-
-    std::string line;
-    int totalKmersSampled = 0;
-    int lineIndex = 0;
-
-    while (std::getline(file, line)) {
-        if (line.empty() || line.size() < k) continue; // Skip empty or short sequences
-
-        std::uniform_int_distribution<int> positionDist(0, line.size() - k);
-
-        int kmersToSample = 50;
-
-        for (int i = 0; i < kmersToSample && totalKmersSampled < sampleCount; ++i) {
-            int pos = positionDist(generator);
-            kmers.push_back(line.substr(pos, k));
-            totalKmersSampled++;
-        }
-
-        if (totalKmersSampled >= sampleCount) break; // Stop if enough k-mers are collected
-        lineIndex++;
-    }
-}
-
-
-
 int main(int argc, char **argv) {
-//    if (argc != 3) {
-//        std::cerr << "usage: ... " << std::endl;
-//        exit(0);
-//    }
+    if (argc != 4) {
+        std::cerr << "Usage: ./bin/query_tags <r_index.ri> <compressed_tags.tags> <reads.txt>" << std::endl;
+        return 1;
+    }
     std::string r_index_file = std::string(argv[1]);
     std::string tag_array_index = std::string(argv[2]);
-    int k = std::stoi(argv[3]);
-    std::string sequence_file = std::string(argv[4]);
-    int threads = 8;
+    std::string reads_file = std::string(argv[3]);
 
     cerr << "Reading the rindex file" << endl;
 
@@ -105,7 +66,7 @@ int main(int argc, char **argv) {
 
     cerr << "Reading the tag array index" << endl;
     TagArray tag_array;
-    std::ifstream in_ds(tag_array_index);
+    std::ifstream in_ds(tag_array_index, std::ios::binary);
     tag_array.load_compressed_tags(in_ds);
 
 #if TIME
@@ -114,123 +75,30 @@ int main(int argc, char **argv) {
     std::cerr << "Loading tag arrays took " << duration2.count() << " seconds" << std::endl;
 #endif
 
-
-//    std::vector<std::string> sequences = readSequencesFromFile(sequence_file);
-//    if (sequences.empty()) {
-//        std::cerr << "No sequences found in file." << std::endl;
-//        return 1;
-//    }
-//
-
-//
-
-//    std::default_random_engine generator(static_cast<long unsigned int>(std::time(0)));
-//    std::uniform_int_distribution<int> sequenceDist(0, sequences.size() - 1);
-//
-//    for (int i = 0; i < 1000; ++i) {
-//        const std::string &sequence = sequences[sequenceDist(generator)];
-//        if (sequence.size() < k) {
-//            continue; // Skip this sequence if it's shorter than k
-//        }
-//        std::uniform_int_distribution<int> positionDist(0, sequence.size() - k);
-//        int pos = positionDist(generator);
-//        kmers.push_back(sequence.substr(pos, k));
-//    }
-
-
-
-
-    cerr << "sample kmers created" << endl;
-
-    std::vector <int> k_value = {10, 15, 20, 30, 50, 100, 200, 500, 1000, 2000};
-
-    for (int k: k_value) {
-
-
-        cerr << "k is: " << k << endl;
-        std::vector<std::string> kmers;
-        sampleKmersFromFile(sequence_file, k, 10000, kmers);
-        cerr << "Finished creating the test kmers" << endl;
-
-
-        int count = 0;
-        // shuffling the kmers
-        std::random_device rd;
-        std::mt19937 g(rd());
-        std::shuffle(kmers.begin(), kmers.end(), g);
-        int size_kmers = kmers.size();
-        size_t total_number_of_tag_runs = 0;
-        size_t total_query_intervals = 0;
-
-#if TIME
-        auto time10 = chrono::high_resolution_clock::now();
-#endif
-
-        double time_r_index = 0.0;
-        double time_tag_query = 0.0;
-
-        // for the first 10000 kmers
-        for (int i = 0; i < 10000 && i < size_kmers; i++) {
-            size_t tag_nums = 0;
-            count++;
-            string kmer = kmers[i];
-
-            auto start_rindex = chrono::high_resolution_clock::now();
-            auto range = r_index.count(kmer);
-            auto end_rindex = chrono::high_resolution_clock::now();
-            time_r_index += chrono::duration<double>(end_rindex - start_rindex).count();
-
-            auto start_tagquery = chrono::high_resolution_clock::now();
-            tag_array.query_compressed(range.first, range.second, tag_nums);
-            auto end_tagquery = chrono::high_resolution_clock::now();
-            time_tag_query += chrono::duration<double>(end_tagquery - start_tagquery).count();
-
-            total_number_of_tag_runs += tag_nums;
-            total_query_intervals += (range.second - range.first + 1);
-        }
-
-        cerr << "All queries done" << endl;
-#if TIME
-        auto time11 = chrono::high_resolution_clock::now();
-        std::chrono::duration<double> duration10 = time11 - time10;
-        std::cerr << "Querying " << count << " kmers with size " << k << " took " << duration10.count() << " seconds" << std::endl;
-        std::cerr << "r_index took " << time_r_index << " seconds in total" << std::endl;
-        std::cerr << "tag_array took " << time_tag_query << " seconds in total" << std::endl;
-        std::cerr << "Total number of tag runs: " << total_number_of_tag_runs << std::endl;
-        std::cerr << "Total length of query intervals: " << total_query_intervals << std::endl;
-        std::cerr << "Tag runs / query interval: " << (double) total_number_of_tag_runs / total_query_intervals << std::endl;
-#endif
+    // Read reads from file
+    std::vector<std::string> reads = readSequencesFromFile(reads_file);
+    if (reads.empty()) {
+        std::cerr << "No reads found in file." << std::endl;
+        return 1;
     }
 
-//    for (string kmer: kmers) {
-//
-//
-//
-//        //find the interval in the bwt
-////        auto range = idx.count(kmer);
-//        auto range = r_index.count(kmer);
-////        cout << range.first << " " << range.second << endl;
-////        cerr << kmer << " " << range.first << " " << range.second << endl;
-//
-//
-//
-//
-//
-////        if (range.first <= range.second) {
-//////            cerr << "The kmer is: " << kmer << endl;
-//////            cout << "bwt range is " << range.first << " " << range.second << endl;
-////            tag_array.query(range.first, range.second);
-////        }
-//
-//    }
-
-
-
-
-
-
-
-
+    // For each read, query r-index and tag arrays, then output summary
+    for (size_t i = 0; i < reads.size(); ++i) {
+        std::string &read = reads[i];
+        auto range = r_index.count(read);
+        size_t number_of_runs = 0;
+        if (range.first > range.second) {
+            std::cerr << "Read " << i << " has no matches" << std::endl;
+            continue;
+        }
+        tag_array.query_compressed(range.first, range.second, number_of_runs);
+        std::cout << "read_index=" << i
+                  << "\tlen=" << read.size()
+                  << "\tbwt_start=" << range.first
+                  << "\tbwt_end=" << range.second
+                  << "\truns=" << number_of_runs
+                  << std::endl;
+    }
 
 }
 
