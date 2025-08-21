@@ -319,32 +319,37 @@ grlbwt-cli -t 8 graph_info
 
 ### query_tags
 
-**Purpose**: Queries the pangenome using tag arrays for k-mer lookups. This is for evaluating the performance of finding the k-mers on the tag arrays.
+**Purpose**: Queries the pangenome using tag arrays for full-read lookups and prints per-read results.
 
 **Input Files Required**:
 - R-index file (`.ri`)
-- Tag arrays file (`.tags` from the build_tags tool) 
-- Sequence file (text file with one sequence per line)
+- Compressed tag arrays index file (`.tags` created either using merge_tags or convert_tags)
+- Reads file (text file with one sequence per line)
 
 **Usage**:
 ```bash
-./bin/query_tags <r_index.ri> <tag_arrays.tags> <k-mer_length> <sequences.txt>
+./bin/query_tags <r_index.ri> <compressed_tags.tags> <reads.txt>
 ```
 
 **Example**:
 ```bash
-./bin/query_tags test_data/x.giraffe.ri test_data/x.tags 31 test_data/small_test_nl.txt
+./bin/query_tags test_data/bidirectional_test/xy.ri test_data/bidirectional_test/xy_bidirectional_compressed.tags test_data/bidirectional_test/test_reads.txt
 ```
 
 **Output**: 
-- K-mer lookup results showing positions in the pangenome
+- Per-read summary lines printed to stdout (read index, length, BWT interval, number of tag runs)
 
 **What it does**:
-1. Loads the r-index and tag arrays
-2. Reads query sequences
-3. Extracts k-mers from the sequences (Randomly selected)
-4. Performs lookups in the tag arrays
-5. Reports k-mer positions in the pangenome
+1. Loads the r-index and compressed tag arrays
+2. Reads query sequences (one per line)
+3. Performs lookups of each read in the r-index
+4. Queries tag arrays for the BWT interval of each read
+5. Prints a summary per read
+
+Note: query_tags requires the compressed tag arrays format. If you built tags directly with build_tags, run:
+```bash
+./bin/convert_tags output.tags output_compressed.tags
+```
 
 ---
 
