@@ -742,4 +742,3 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 }
 
 #endif //PANGENOME_INDEX_ALGORITHM_HPP
-

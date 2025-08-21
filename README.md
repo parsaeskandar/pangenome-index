@@ -12,6 +12,7 @@ A comprehensive toolkit for building and querying pangenome indices using tag ar
   - [build_tags](#build_tags)
   - [build_rindex](#build_rindex)
   - [merge_tags](#merge_tags)
+  - [convert_tags](#convert_tags)
   - [find_mems](#find_mems)
   - [query_tags](#query_tags)
 - [File Formats](#file-formats)
@@ -72,7 +73,7 @@ The build process will:
 
 ## Quick Start
 
-For small to medium-sized graphs, you can run the entire pipeline using only the `build_tags` binary:
+For small to medium-sized graphs, you can run the pipeline with `build_tags`. If you plan to use `find_mems`, you must convert the tag arrays to the compressed format first using `convert_tags`.
 
 ### Step 1: Prepare Your Graph
 
@@ -92,8 +93,11 @@ grlbwt-cli -t 8 graph_info
 ### Step 3: Build Tag Arrays
 
 ```bash
-# Build tag arrays using the graph and RL-BWT files
+# Build tag arrays using the graph and RL-BWT files (algorithm format)
 ./bin/build_tags your_graph.gbz graph_info.rl_bwt output.tags
+
+# Convert to compressed format required by find_mems
+./bin/convert_tags output.tags output_compressed.tags
 ```
 
 ## Large Graph Processing
@@ -188,11 +192,12 @@ grlbwt-cli -t 8 graph_info
 
 **Example**:
 ```bash
-./bin/build_tags test_data/x.giraffe.gbz test_data/x.rl_bwt output.tags
+./bin/build_tags test_data/bidirectional_test/xy.gbz test_data/bidirectional_test/contigs_xy.rl_bwt xy_bidirectional.tags
 ```
 
 **Output**: 
-- `output.tags`: Binary file containing the tag arrays index
+- `output.tags`: Binary file containing the tag arrays index (algorithm format)
+- To use with `find_mems`, convert to compressed format: `./bin/convert_tags output.tags output_compressed.tags`
 
 **What it does**:
 1. Loads the pangenome graph from the GBZ file
@@ -217,7 +222,7 @@ grlbwt-cli -t 8 graph_info
 
 **Example**:
 ```bash
-./bin/build_rindex test_data/x.rl_bwt
+./bin/build_rindex test_data/bidirectional_test/contigs_xy.rl_bwt
 ```
 
 **Output**: 
@@ -244,10 +249,6 @@ grlbwt-cli -t 8 graph_info
 ./bin/merge_tags <whole_genome_rindex> <rl_bwt_directory> <output_merged.tags>
 ```
 
-**Example**:
-```bash
-./bin/merge_tags whole_genome.ri /path/to/chromosome_rlbwt_files/ merged_output.tags
-```
 
 **Output**: 
 - `merged_output.tags`: Merged tag arrays file
@@ -260,23 +261,48 @@ grlbwt-cli -t 8 graph_info
 
 ---
 
+### convert_tags
+
+**Purpose**: Converts tag arrays written in the algorithm format to the compressed format required by `find_mems`.
+
+**Input Files Required**:
+- Tag arrays file (`.tags`) produced by `build_tags`
+
+**Usage**:
+```bash
+./bin/convert_tags <input.tags> <output_compressed.tags>
+```
+
+**Example**:
+```bash
+./bin/convert_tags test_data/bidirectional_test/xy_bidirectional.tags xy_bidirectional_compressed.tags
+```
+
+**Output**:
+- `output_compressed.tags`: Compressed tag arrays index
+
+**Notes**:
+- This step is required before running `find_mems` if you built the tags directly using `build_tags`.
+
+---
+
 ### find_mems
 
 **Purpose**: Finds Maximal Exact Matches (MEMs) between query sequences and the pangenome, reporting unique tags of those MEMs.
 
 **Input Files Required**:
 - R-index file (`.ri`)
-- Tag arrays file (`.tags`)
+- Compressed tag arrays index file (`.tags` created either using merge_tags or convert_tags)
 - Reads file (text file with one sequence per line)
 
 **Usage**:
 ```bash
-./bin/find_mems <r_index.ri> <tag_arrays.tags> <reads.txt> <min_mem_length> <min_occurrences>
+./bin/find_mems <r_index.ri> <compressed_tags.tags> <reads.txt> <min_mem_length> <min_occurrences>
 ```
 
 **Example**:
 ```bash
-./bin/find_mems test_data/x.giraffe.ri test_data/x.tags.index test_data/small_test_nl.txt 10 1
+./bin/find_mems test_data/bidirectional_test/xy.ri xy_bid_compressed.tags test_data/bidirectional_test/reads.txt 5 1
 ```
 
 **Output**: 
@@ -297,7 +323,7 @@ grlbwt-cli -t 8 graph_info
 
 **Input Files Required**:
 - R-index file (`.ri`)
-- Tag arrays file (`.tags`)
+- Tag arrays file (`.tags` from the build_tags tool) 
 - Sequence file (text file with one sequence per line)
 
 **Usage**:
@@ -307,7 +333,7 @@ grlbwt-cli -t 8 graph_info
 
 **Example**:
 ```bash
-./bin/query_tags test_data/x.giraffe.ri test_data/x.tags.index 31 test_data/small_test_nl.txt
+./bin/query_tags test_data/x.giraffe.ri test_data/x.tags 31 test_data/small_test_nl.txt
 ```
 
 **Output**: 
@@ -357,8 +383,9 @@ grlbwt-cli -t 8 graph_info
 # 4. Build r-index
 ./bin/build_rindex graph_info.rl_bwt > output.ri
 
-# 5. Query with reads
-./bin/find_mems output.ri output.tags your_reads.txt 10 1
+# 5. Convert tags for MEM search and query with reads
+./bin/convert_tags output.tags output_compressed.tags
+./bin/find_mems output.ri output_compressed.tags your_reads.txt 10 1
 ```
 
 ### Working with Test Data
@@ -367,7 +394,8 @@ grlbwt-cli -t 8 graph_info
 # Use the provided test data
 ./bin/build_tags test_data/x.giraffe.gbz test_data/x.rl_bwt test_output.tags
 ./bin/build_rindex test_data/x.rl_bwt > test_output.ri
-./bin/find_mems test_output.ri test_output.tags test_data/small_test_nl.txt 5 1
+./bin/convert_tags test_output.tags test_output_compressed.tags
+./bin/find_mems test_output.ri test_output_compressed.tags test_data/small_test_nl.txt 5 1
 ```
 
 ## Troubleshooting
