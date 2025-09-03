@@ -57,7 +57,7 @@ HEADERS = $(wildcard include/pangenome_index/*.hpp)
 LIBOBJS = $(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o)
 LIBRARY = $(BUILD_LIB)/libpanindexer.a
 
-PROGRAMS = $(addprefix $(BUILD_BIN)/,build_tags merge_tags build_rindex query_tags tags_check find_mems convert_tags)
+PROGRAMS = $(addprefix $(BUILD_BIN)/,build_tags merge_tags build_rindex query_tags tags_check find_mems convert_tags print_stats)
 
 # Targets
 .PHONY: all clean directories grlbwt test

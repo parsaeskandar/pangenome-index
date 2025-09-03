@@ -260,6 +260,28 @@ namespace panindexer {
 
 
 
+    // ================================ Stats for compressed format ================================
+    size_t TagArray::number_of_runs_compressed() const {
+        // Number of runs equals number of 1s in bwt_intervals
+        return this->bwt_intervals.size() ? this->bwt_intervals_rank(this->bwt_intervals.size()) : 0;
+    }
+
+    size_t TagArray::bytes_encoded_runs() const {
+        return this->encoded_runs.size() * sizeof(gbwt::byte_type);
+    }
+
+    size_t TagArray::bytes_encoded_runs_starts_sd() const {
+        return sdsl::size_in_bytes(this->encoded_runs_starts_sd);
+    }
+
+    size_t TagArray::bytes_bwt_intervals() const {
+        return sdsl::size_in_bytes(this->bwt_intervals);
+    }
+
+    size_t TagArray::bytes_total_compressed() const {
+        return bytes_encoded_runs() + bytes_encoded_runs_starts_sd() + bytes_bwt_intervals();
+    }
+
 
 
 
