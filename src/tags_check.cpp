@@ -312,9 +312,9 @@ int main(int argc, char **argv) {
     std::string tag_array_index_dir = std::string(argv[3]);
     int threads = 8;
 
-    GBZ gbz;
-    cerr << "Loading the graph file" << endl;
-    sdsl::simple_sds::load_from(gbz, gbz_graph);
+    // GBZ gbz;
+    // cerr << "Loading the graph file" << endl;
+    // sdsl::simple_sds::load_from(gbz, gbz_graph);
 
     std::cerr << "Getting the lists of tag files" << std::endl;
     // get the list of files in the directory
@@ -328,12 +328,12 @@ int main(int argc, char **argv) {
     }
 
 
-    cerr << "Reading the whole genome r-index file" << endl;
-    FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
-    }
+    // cerr << "Reading the whole genome r-index file" << endl;
+    // FastLocate r_index;
+    // if (!sdsl::load_from_file(r_index, r_index_file)) {
+    //     std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
+    //     std::exit(EXIT_FAILURE);
+    // }
 
 
     vector<size_t> tag_count_per_file;
@@ -350,8 +350,8 @@ int main(int argc, char **argv) {
             auto tag_block = panindexer::TagArray::decode_run(
                     gbwt::ByteCode::read(in, file_pos)
             );
-
-            tag_count_per_file[i] += tag_block.second;
+            tag_count_per_file[i]++;
+            // tag_count_per_file[i] += tag_block.second;
         }
 
 
@@ -360,85 +360,85 @@ int main(int argc, char **argv) {
 
 
     for (size_t i = 0; i < number_of_file; i++) {
-        std::cerr << "File: " << files[i] << " Tags: " << tag_count_per_file[i] << std::endl;
+        std::cerr << "File: " << files[i] << " Tags runs: " << tag_count_per_file[i] << std::endl;
     }
+    exit(0);
+
+
+//     std::cerr << "Finding the node to component mapping" << std::endl;
+//     // finding the components
+//     std::unordered_map<nid_t, size_t> node_to_comp_map = node_to_component(gbz);
+
+//     std::vector<int> file_to_comp(number_of_file);
+//     std::vector<int> comp_to_file(number_of_file);
+
+//     std::cerr << "Initializing the reader" << std::endl;
+//     FileReader reader(files, threads, 1000000);
+//     std::cerr << "Creating the mapping from comp to tag files" << std::endl;
+//     // for each tag block files, we read the first block and read the first node
+//     for (auto i = 0; i < number_of_file; i++) {
+//         // get the component of the node of the first block
+//         size_t comp = node_to_comp_map[id(reader.get_first_tag(i))];
+//         std::cerr << "The component of the first block of file " << files[i] << " is " << comp << " first tag " << reader.get_first_tag(i)  << " node id is " << id(reader.get_first_tag(i)) << std::endl;
+//         file_to_comp[i] = comp;
+//         comp_to_file[comp] = i;
+
+//     }
+
+//     std::cerr << "The mapping from comp to tag files is done" << std::endl;
+
+
+//     auto total_strings = r_index.tot_strings();
+//     std::vector<size_t> seq_id_to_comp_id;
+//     seq_id_to_comp_id.resize(total_strings);
 
 
 
-    std::cerr << "Finding the node to component mapping" << std::endl;
-    // finding the components
-    std::unordered_map<nid_t, size_t> node_to_comp_map = node_to_component(gbz);
-
-    std::vector<int> file_to_comp(number_of_file);
-    std::vector<int> comp_to_file(number_of_file);
-
-    std::cerr << "Initializing the reader" << std::endl;
-    FileReader reader(files, threads, 1000000);
-    std::cerr << "Creating the mapping from comp to tag files" << std::endl;
-    // for each tag block files, we read the first block and read the first node
-    for (auto i = 0; i < number_of_file; i++) {
-        // get the component of the node of the first block
-        size_t comp = node_to_comp_map[id(reader.get_first_tag(i))];
-        std::cerr << "The component of the first block of file " << files[i] << " is " << comp << " first tag " << reader.get_first_tag(i)  << " node id is " << id(reader.get_first_tag(i)) << std::endl;
-        file_to_comp[i] = comp;
-        comp_to_file[comp] = i;
-
-    }
-
-    std::cerr << "The mapping from comp to tag files is done" << std::endl;
+//     // get the first node of each path and get the component id of the node
+// #pragma omp parallel for
+//     for (size_t i = 0; i < total_strings; i++) {
+//         auto seq_graph_nodes = gbz.index.extract(i * 2);
+//         if (!seq_graph_nodes.empty()) {
+//             size_t node_id = gbwt::Node::id(seq_graph_nodes[0]);
+//             seq_id_to_comp_id[i] = node_to_comp_map.at(node_id);
+//         }
+//     }
+//     std::cerr << "The mapping from seq id to comp id is done" << std::endl;
 
 
-    auto total_strings = r_index.tot_strings();
-    std::vector<size_t> seq_id_to_comp_id;
-    seq_id_to_comp_id.resize(total_strings);
+//     // note that the first #num_seq tags are correspond to the ENDMARKERs
+//     auto total_tags_count = r_index.get_sequence_size() - total_strings;
+//     std::cerr << "Total tags count " << total_tags_count << std::endl;
 
 
 
-    // get the first node of each path and get the component id of the node
-#pragma omp parallel for
-    for (size_t i = 0; i < total_strings; i++) {
-        auto seq_graph_nodes = gbz.index.extract(i * 2);
-        if (!seq_graph_nodes.empty()) {
-            size_t node_id = gbwt::Node::id(seq_graph_nodes[0]);
-            seq_id_to_comp_id[i] = node_to_comp_map.at(node_id);
-        }
-    }
-    std::cerr << "The mapping from seq id to comp id is done" << std::endl;
+// //    auto total_strings = r_index.tot_strings();
+//     auto first = r_index.locateFirst();
+
+//     for (int i = 0; i < total_strings - 1 ; i++){
+//         first = r_index.locateNext(first);
+//     }
+
+//     auto total_bwt_size = r_index.get_sequence_size();
+
+//     vector <size_t> rindex_per_file;
+//     rindex_per_file.resize(number_of_file, 0);
+
+//     std::cerr << "Total string " << total_strings << " Total bwt size " << total_bwt_size << std::endl;
+
+//     for (size_t i = total_strings; i < total_bwt_size; i++){
+//         auto seq_id = r_index.seqId(first);
+// //        std::cerr << "Seq id " << seq_id << std::endl;
+//         // want to get the file number that is associated with the seq id
+//         auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
+//         rindex_per_file[current_file] += 1;
+//         first = r_index.locateNext(first);
+//     }
 
 
-    // note that the first #num_seq tags are correspond to the ENDMARKERs
-    auto total_tags_count = r_index.get_sequence_size() - total_strings;
-    std::cerr << "Total tags count " << total_tags_count << std::endl;
-
-
-
-//    auto total_strings = r_index.tot_strings();
-    auto first = r_index.locateFirst();
-
-    for (int i = 0; i < total_strings - 1 ; i++){
-        first = r_index.locateNext(first);
-    }
-
-    auto total_bwt_size = r_index.get_sequence_size();
-
-    vector <size_t> rindex_per_file;
-    rindex_per_file.resize(number_of_file, 0);
-
-    std::cerr << "Total string " << total_strings << " Total bwt size " << total_bwt_size << std::endl;
-
-    for (size_t i = total_strings; i < total_bwt_size; i++){
-        auto seq_id = r_index.seqId(first);
-//        std::cerr << "Seq id " << seq_id << std::endl;
-        // want to get the file number that is associated with the seq id
-        auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
-        rindex_per_file[current_file] += 1;
-        first = r_index.locateNext(first);
-    }
-
-
-    for (size_t i = 0; i < number_of_file; i++) {
-        std::cerr << "File: " << files[i] << " R-index: " << rindex_per_file[i] << " Tag count from file " << tag_count_per_file[i] << std::endl;
-    }
+//     for (size_t i = 0; i < number_of_file; i++) {
+//         std::cerr << "File: " << files[i] << " R-index: " << rindex_per_file[i] << " Tag count from file " << tag_count_per_file[i] << std::endl;
+//     }
 
 
 }

@@ -60,6 +60,13 @@ namespace panindexer {
         void load_compressed_tags(std::istream &in);
         void query_compressed(size_t start, size_t end, size_t &number_of_runs);
 
+        // Statistics helpers for compressed format
+        size_t number_of_runs_compressed() const;
+        size_t bytes_encoded_runs() const;
+        size_t bytes_encoded_runs_starts_sd() const;
+        size_t bytes_bwt_intervals() const;
+        size_t bytes_total_compressed() const;
+
     private:
 
         //
