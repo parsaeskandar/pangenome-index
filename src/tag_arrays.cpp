@@ -34,6 +34,25 @@ namespace panindexer {
 
     }
 
+    gbwt::size_type TagArray::encode_run_length_compact(size_t offset, bool is_rev, uint16_t length, int64_t node_id){
+        gbwt::size_type encoded = (offset & 0x3FF) |  // 10 bits for offset
+                           ((is_rev & 0x1) << 10) | // 1 bit for reverse flag
+                           (static_cast<uint64_t>(node_id) << (11)); // Remaining bits for node ID
+
+        return encoded;
+
+    }
+
+    pos_t TagArray::decode_run_length_compact(gbwt::size_type encoded) {
+        size_t decoded_offset = encoded & 0x3FF; // Extract 10-bit offset
+        bool decoded_flag = (encoded >> 10) & 0x1; // Extract 1-bit reverse flag
+        int64_t decoded_node_id = (encoded >> 11); // Extract node ID
+
+        pos_t graph_pos = make_pos_t(decoded_node_id, decoded_flag, decoded_offset);
+        return graph_pos;
+
+    }
+
 
 
     std::pair<pos_t, uint16_t> TagArray::decode_run(gbwt::size_type encoded) {
@@ -655,6 +674,8 @@ namespace panindexer {
 
     }
 
+    
+
 
     void TagArray::load_compressed_tags(std::istream &in) {
         // Read the size of the encoded_runs vector
@@ -758,6 +779,88 @@ namespace panindexer {
            std::cout << pos << ", ";
        }
        std::cout << std::endl;
+    }
+
+    void TagArray::compressed_serialize_compact(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs){
+        std::vector<gbwt::byte_type> encoded_runs;
+        if (tag_runs.size() > 0) {
+            for (auto [value, run_length] : tag_runs) {
+
+                int max_tag_len = 1 << length_bits;
+                while (run_length >= max_tag_len){
+                    bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
+                    this->cumulative_run_bwt_position += (max_tag_len - 1);
+
+                    if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
+                        this->start_pos = this->cumulative_starts + encoded_runs.size();
+                        encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
+                        this->encoded_start_ones++;
+                    }
+
+                    gbwt::size_type encoded = encode_run_length_compact(offset(value), is_rev(value), (max_tag_len - 1), id(value));
+                    gbwt::ByteCode::write(encoded_runs, encoded);
+                    this->remaining_run_to_write_start++;
+                    run_length -= (max_tag_len - 1);
+                }
+
+                if (run_length > 0){
+                    bwt_intervals_file.write(reinterpret_cast<const char*>(&this->cumulative_run_bwt_position), sizeof(this->cumulative_run_bwt_position));
+                    this->cumulative_run_bwt_position += run_length;
+
+                    if (this->remaining_run_to_write_start % this->encoded_start_every_k_run == 0){
+                        this->start_pos = this->cumulative_starts + encoded_runs.size();
+                        encoded_starts_file.write(reinterpret_cast<const char*>(&this->start_pos), sizeof(this->start_pos));
+                        this->encoded_start_ones++;
+                    }
+
+                    gbwt::size_type encoded = encode_run_length_compact(offset(value), is_rev(value), run_length, id(value));
+                    gbwt::ByteCode::write(encoded_runs, encoded);
+                    this->remaining_run_to_write_start++;
+                }
+            }
+
+            size_t size = encoded_runs.size();
+            main_out.write(reinterpret_cast<const char *>(encoded_runs.data()), size * sizeof(gbwt::byte_type));
+            this->cumulative_starts += size;
+        } else {
+            std::cerr << "No tags to compress and write (compact)" << std::endl;
+        }
+    }
+
+    void TagArray::query_compressed_compact(size_t start, size_t end, size_t &number_of_runs) {
+        size_t first_bit_index = this->bwt_intervals_rank(start + 1);
+        size_t end_bit_index = this->bwt_intervals_rank(end + 1);
+        auto run_nums = end_bit_index - first_bit_index + 1;
+        number_of_runs = run_nums;
+
+        std::vector<std::uint64_t> unique_positions;
+        unique_positions.reserve(run_nums);
+
+        size_t current_tag_run_index = first_bit_index - (first_bit_index % this->encoded_start_every_k_run);
+        size_t move_tags = first_bit_index % this->encoded_start_every_k_run;
+
+        std::uint64_t bit_location = this->encoded_runs_sd_starts_select(current_tag_run_index / this->encoded_start_every_k_run + 1);
+        gbwt::size_type decc;
+
+        while (move_tags > 1){
+            decc = gbwt::ByteCode::read(this->encoded_runs, bit_location);
+            move_tags--;
+        }
+
+        while (run_nums > 0) {
+            decc = gbwt::ByteCode::read(this->encoded_runs, bit_location);
+            pos_t decoded_pos = decode_run_length_compact(decc);
+            run_nums--;
+            unique_positions.push_back(gbwtgraph::Position::encode(decoded_pos).value);
+        }
+        std::sort(unique_positions.begin(), unique_positions.end());
+        unique_positions.erase(std::unique(unique_positions.begin(), unique_positions.end()), unique_positions.end());
+
+        std::cout << "Number of unique positions: " << unique_positions.size() << std::endl;
+        for (auto pos : unique_positions) {
+            std::cout << pos << ", ";
+        }
+        std::cout << std::endl;
     }
 
 

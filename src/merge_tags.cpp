@@ -689,7 +689,7 @@ int main(int argc, char **argv) {
     // TODO: handle the case in compressed version - also the last element might be needed for merging later
 
 
-    tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp_tag_runs);
+    tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, temp_tag_runs);
 //    std::vector<gbwt::byte_type> temp_encoded_runs;
 //    if (temp_tag_runs.size() > 0) {
 //        for (const auto& [value, run_length] : temp_tag_runs) {
@@ -777,7 +777,7 @@ int main(int argc, char **argv) {
             current_tags[0].second += previous_last_run.second;
         } else {
             std::vector<std::pair<pos_t, uint16_t>> temp = {previous_last_run};
-            tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp);
+            tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, temp);
 
 //            std::cerr << "Handling the previous last run" << std::endl;
 
@@ -809,7 +809,7 @@ int main(int argc, char **argv) {
 
 
         tag_run_count += current_tags.size();
-        tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, current_tags);
+        tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, current_tags);
 
 
     }

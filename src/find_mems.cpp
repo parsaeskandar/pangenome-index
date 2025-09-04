@@ -74,8 +74,8 @@ int main(int argc, char **argv) {
 
     cerr << "Reading the tag array index" << endl;
     TagArray tag_array;
-    std::ifstream in_ds(tag_array_index);
-    tag_array.load_compressed_tags(in_ds);
+    std::ifstream in_ds(tag_array_index, std::ios::binary);
+    tag_array.load_compressed_tags_compact(in_ds);
 
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
@@ -124,8 +124,8 @@ int main(int argc, char **argv) {
 #endif
 
 
-            // Query the tag array for this MEM
-             tag_array.query_compressed(mem.bwt_start, mem.bwt_start + mem.size - 1, tag_nums);
+            // Query the tag array for this MEM (compact)
+            tag_array.query_compressed_compact(mem.bwt_start, mem.bwt_start + mem.size - 1, tag_nums);
 
 #if TIME
             auto time7 = chrono::high_resolution_clock::now();

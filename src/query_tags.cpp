@@ -67,7 +67,7 @@ int main(int argc, char **argv) {
     cerr << "Reading the tag array index" << endl;
     TagArray tag_array;
     std::ifstream in_ds(tag_array_index, std::ios::binary);
-    tag_array.load_compressed_tags(in_ds);
+    tag_array.load_compressed_tags_compact(in_ds);
 
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
             std::cerr << "Read " << i << " has no matches" << std::endl;
             continue;
         }
-        tag_array.query_compressed(range.first, range.second, number_of_runs);
+        tag_array.query_compressed_compact(range.first, range.second, number_of_runs);
         std::cout << "read_index=" << i
                   << "\tlen=" << read.size()
                   << "\tbwt_start=" << range.first
