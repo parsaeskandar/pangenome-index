@@ -537,6 +537,7 @@ int main(int argc, char **argv) {
 
 
     const std::string filename = "whole_genome_tag_array_compressed.tags";
+    const std::string encoded_runs_path = filename + ".encoded_runs.tmp";
     const std::string encoded_starts_file = "encoded_starts.bin";
     const std::string bwt_intervals_file = "bwt_intervals.bin";
 
@@ -583,9 +584,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // write a size_t dummy to fill with the size of the encoded_runs later
-    size_t placeholder = 0;
-    out.write(reinterpret_cast<const char*>(&placeholder), sizeof(size_t));
+    // encoded_runs will be written as sdsl int_vector; no size header needed.
 
 
     std::ofstream out_bwt_intervals(bwt_intervals_file, std::ios::binary | std::ios::app);
@@ -628,6 +627,16 @@ int main(int argc, char **argv) {
 
 
 
+
+    // Determine maximum node id to compute width for encoded runs
+    nid_t max_node_id = 0;
+    auto weak_components = gbwtgraph::weakly_connected_components(gbz.graph);
+    for (const auto& comp : weak_components) {
+        for (nid_t nid : comp) { if (nid > max_node_id) max_node_id = nid; }
+    }
+    size_t node_bits = sdsl::bits::hi(max_node_id) + 1;
+    size_t width_bits = 10 + 1 + node_bits;
+    tag_array.begin_encoded_runs_sdsl(encoded_runs_path, width_bits);
 
     // Now have to find the run and index of the first index that is not an ENDMARKER
     // having to find the run and index of the BWT position num_endmarkers
@@ -689,7 +698,9 @@ int main(int argc, char **argv) {
     // TODO: handle the case in compressed version - also the last element might be needed for merging later
 
 
-    tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, temp_tag_runs);
+    for (auto &p : temp_tag_runs) {
+        tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+    }
 //    std::vector<gbwt::byte_type> temp_encoded_runs;
 //    if (temp_tag_runs.size() > 0) {
 //        for (const auto& [value, run_length] : temp_tag_runs) {
@@ -777,7 +788,9 @@ int main(int argc, char **argv) {
             current_tags[0].second += previous_last_run.second;
         } else {
             std::vector<std::pair<pos_t, uint16_t>> temp = {previous_last_run};
-            tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, temp);
+            for (auto &p : temp) {
+                tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+            }
 
 //            std::cerr << "Handling the previous last run" << std::endl;
 
@@ -809,7 +822,9 @@ int main(int argc, char **argv) {
 
 
         tag_run_count += current_tags.size();
-        tag_array.compressed_serialize_compact(out, out_encoded_starts, out_bwt_intervals, current_tags);
+        for (auto &p : current_tags) {
+            tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+        }
 
 
     }
@@ -820,6 +835,16 @@ int main(int argc, char **argv) {
     }
 
 
+    // Finish encoded runs iv and serialize it to the main index file
+    tag_array.end_encoded_runs_sdsl();
+    {
+        std::ifstream iv_in(encoded_runs_path, std::ios::binary);
+        tag_array.load_encoded_runs_sdsl(iv_in);
+        tag_array.serialize_encoded_runs_sdsl(out);
+        iv_in.close();
+        std::remove(encoded_runs_path.c_str());
+    }
+
     out_encoded_starts.close();
     out_bwt_intervals.close();
     out.close();
@@ -828,7 +853,7 @@ int main(int argc, char **argv) {
     std::cerr << "Total length of encoded runs " << start_pos + 1 << std::endl;
     std::cerr << "Saving the start of runs every " << encoded_start_every_k_run << " which lead to " << encoded_start_ones << " 1s in the start sd_vector" << std::endl;
 
-    tag_array.merge_compressed_files(filename, encoded_starts_file, bwt_intervals_file);
+    tag_array.merge_compressed_files_sdsl(filename, encoded_starts_file, bwt_intervals_file);
     std::cerr << "Index files merged and ready to use!" << std::endl;
 
 
