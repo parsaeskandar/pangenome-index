@@ -71,6 +71,11 @@ namespace panindexer {
 
         void load(std::istream &in);
 
+        // Encoded block I/O (alternate format)
+        size_type serialize_encoded(std::ostream &out, sdsl::structure_tree_node *v = nullptr, std::string name = "") const;
+
+        void load_encoded(std::istream &in);
+
         void set_buff_reader(bwt_buff_reader &source) { this->buff_reader = &source; }
 
         const static std::string EXTENSION; // .ri
@@ -104,6 +109,9 @@ namespace panindexer {
             void unset(std::uint64_t flag) { this->flags &= ~flag; }
 
             bool get(std::uint64_t flag) const { return (this->flags & flag); }
+
+            // Flag bits
+            constexpr static std::uint64_t ENCODED_BLOCKS = 0x1ULL;
         };
 
 
@@ -163,6 +171,7 @@ namespace panindexer {
                 this->character_cum_ranks.resize(source.size());
                 for (size_t i = 0; i < this->character_cum_ranks.size(); i++) {
                     this->character_cum_ranks[i] = source[i];
+                    std::cerr << "character_cum_ranks[" << i << "]=" << this->character_cum_ranks[i] << std::endl;
                 }
             }
 
@@ -224,7 +233,7 @@ namespace panindexer {
                 return run_num;
             }
 
-            size_t bwt_char_at(size_t pos) {
+            size_t bwt_char_at(size_t pos) const {
                 size_t sym, freq;
                 size_t offset = 0;
                 for (size_t i = 0; i < this->runs.size(); i++) {
@@ -311,6 +320,16 @@ namespace panindexer {
         // store the size of the whole text
         size_t sequence_size;
 
+        // Encoded blocks storage
+        // Start bit position of each block in the encoded bitstream
+        sdsl::int_vector<0> blocks_encoded_start_bits;
+        // Concatenated encoded data for all blocks (bytes as a bitstream container)
+        std::vector<gbwt::byte_type> blocks_encoded_stream;
+        // Stored block size for encoded load path
+        size_t encoded_block_size = 0;
+        // Global alphabet mask for encoded blocks: whether 'N' exists (true = present)
+        bool encoded_has_N = false;
+
 
         Header header;
 
@@ -373,6 +392,25 @@ namespace panindexer {
         std::vector <size_type> decompressSA() const;
 
         std::vector <size_type> decompressDA() const;
+
+        // Encoded convenience wrappers (operate on encoded or legacy equally)
+        std::vector<size_type> decompressSA_encoded() const { return this->decompressSA(); }
+        std::vector<size_type> decompressDA_encoded() const { return this->decompressDA(); }
+
+        // Encoded query variants (operate on encoded blocks without materializing Run_blocks)
+        gbwt::range_type extend_encoded(gbwt::range_type state, size_t sym, size_type &first) const;
+        gbwt::range_type extend_encoded(gbwt::range_type state, size_t sym) const {
+            size_type first = NO_POSITION;
+            return this->extend_encoded(state, sym, first);
+        }
+        std::vector<size_type> locate_encoded(gbwt::range_type state, size_type first = NO_POSITION) const;
+
+        // Encoded FMD bidirectional extensions
+        bi_interval backward_extend_encoded(const bi_interval& bint, size_t symbol);
+        bi_interval forward_extend_encoded(const bi_interval& bint, size_t symbol);
+
+        // Format check
+        inline bool is_encoded() const { return !this->blocks_encoded_start_bits.empty(); }
 
 //
 ////------------------------------------------------------------------------------
@@ -472,6 +510,14 @@ namespace panindexer {
             return this->LF(range, sym, starts_with_to, first_run);
         };
 
+        // Encoded LF (public overloads)
+        gbwt::range_type LF_encoded(gbwt::range_type range, size_t sym, bool &starts_with_to, size_t &first_run) const;
+        gbwt::range_type LF_encoded(gbwt::range_type range, size_t sym) const {
+            bool starts_with_to = false;
+            size_t first_run = NO_POSITION;
+            return this->LF_encoded(range, sym, starts_with_to, first_run);
+        }
+
 
         // just the backward navigation
         size_t LF(size_t idx) {
@@ -500,6 +546,15 @@ namespace panindexer {
             return range;
         }
 
+        // Encoded count using LF_encoded
+        gbwt::range_type count_encoded(std::string &pattern) const {
+            gbwt::range_type range = {0, this->bwt_size() - 1};
+            for (size_t i = pattern.length(); i > 0; i--) {
+                range = this->LF_encoded(range, pattern[i - 1]);
+            }
+            return range;
+        }
+
 
         // first is the symbol and the second is the next position index (backtrack)
         std::pair <size_t, size_t> psi(size_t idx);
@@ -507,6 +562,8 @@ namespace panindexer {
         std::pair <size_t, size_t> psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position);
 
         size_type total_runs();
+
+        // Return total number of runs (works for both encoded and unencoded blocks)
 
         size_t get_sequence_size() const { return this->sequence_size; }
 
@@ -552,6 +609,10 @@ namespace panindexer {
         // this function returns the rank of the symbol at the ps
         std::vector<size_t> rank_at_cached(size_t pos) const;
 
+        // Helpers to map positions to runs
+        void run_id_and_offset_at(size_t pos, size_t &run_id, size_t &offset_of_first) const;
+        size_t last_run_size_global() const;
+
         size_type getSample(size_type run_id) const {
             return this->samples[run_id];
         }
@@ -575,7 +636,36 @@ namespace panindexer {
         void bwt_index_run_id(unsigned long idx, gbwt::range_type &run, size_type &run_id);
 
 
-        size_t bwt_char_at(size_t idx);
+        size_t bwt_char_at(size_t idx) const;
+
+        // Encoded helpers
+        size_t bwt_char_at_encoded(size_t idx) const;
+        size_t rankAt_encoded(size_t pos, size_t symbol, size_t &run_id, size_t &current_position) const;
+        std::vector<size_t> rank_at_cached_encoded(size_t pos) const;
+        std::pair<size_t, size_t> psi_encoded(size_t idx);
+        std::pair<size_t, size_t> psi_and_run_id_encoded(size_t idx, size_t &run_id, size_t &current_position);
+        
+        // Centralized per-block encoded operations helper
+        struct EncodedBlock {
+            const std::vector<gbwt::byte_type> *stream;
+            bool hasN;
+            size_t cum_len; // number of cumulative entries stored per block (C.size())
+            const sdsl::int_vector<8> *sym_map_ptr; // symbol byte -> index in cumulative vector
+            EncodedBlock(const std::vector<gbwt::byte_type> &s, bool hasN_present, size_t cum_entries, const sdsl::int_vector<8> *sym_map_ref)
+                    : stream(&s), hasN(hasN_present), cum_len(cum_entries), sym_map_ptr(sym_map_ref) {}
+            void read_cumulative(gbwt::size_type &loc, size_t cum_nuc[6]) const;
+            size_t char_at(gbwt::size_type loc, size_t end_pos, size_t rel) const;
+            size_t rank_of_code(gbwt::size_type &loc, size_t end_pos, int target_code, size_t rel, size_t &runnum, size_t &cur) const;
+            void ranks_at(gbwt::size_type &loc, size_t end_pos, size_t rel, size_t out[6]) const;
+            void skip_header(gbwt::size_type &loc) const;
+        };
+
+        // Encoding utilities
+        inline int symbol_to_code(size_t symbol) const {
+            for (int i = 0; i < (int)nuc.size(); i++) { if ((size_t)nuc[i] == symbol) return i; }
+            return 0;
+        }
+        inline size_t code_to_symbol(int code) const { return (size_t)nuc[code]; }
 
 
 

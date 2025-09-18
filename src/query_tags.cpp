@@ -52,9 +52,10 @@ int main(int argc, char **argv) {
 #endif
 
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) { std::cerr << "Cannot open r-index: " << r_index_file << std::endl; return 1; }
+        r_index.load_encoded(rin);
     }
 
 #if TIME
@@ -85,7 +86,24 @@ int main(int argc, char **argv) {
     // For each read, query r-index and tag arrays, then output summary
     for (size_t i = 0; i < reads.size(); ++i) {
         std::string &read = reads[i];
-        auto range = r_index.count(read);
+        gbwt::range_type range;
+        if (r_index.is_encoded()) {
+            range = {0, r_index.bwt_size() - 1};
+            std::cerr << "[encoded count] read_index=" << i << " len=" << read.size() << std::endl;
+            for (size_t pos = read.size(); pos > 0; --pos) {
+                char c = read[pos - 1];
+                gbwt::range_type prev = range;
+                range = r_index.count_encoded(read);
+                // range = r_index.LF_encoded(range, static_cast<size_t>(c));
+                // std::cerr << "  step=" << (read.size() - pos + 1)
+                //           << " char='" << c << "' prev=[" << prev.first << "," << prev.second
+                //           << "] new=[" << range.first << "," << range.second << "]" << std::endl;
+                if (range.first > range.second) break;
+            }
+            std::cerr << "  final range=[" << range.first << "," << range.second << "]\n";
+        } else {
+            range = r_index.count(read);
+        }
         size_t number_of_runs = 0;
         if (range.first > range.second) {
             std::cerr << "Read " << i << " has no matches" << std::endl;

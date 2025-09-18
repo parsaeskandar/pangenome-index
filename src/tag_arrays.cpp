@@ -853,6 +853,42 @@ namespace panindexer {
        std::cout << std::endl;
     }
 
+    void TagArray::query_compressed_compact(size_t start, size_t end, size_t &number_of_runs) {
+        size_t first_bit_index = this->bwt_intervals_rank(start + 1);
+        size_t end_bit_index = this->bwt_intervals_rank(end + 1);
+        auto run_nums = end_bit_index - first_bit_index + 1;
+        number_of_runs = run_nums;
+
+        std::vector<std::uint64_t> unique_positions;
+        unique_positions.reserve(run_nums);
+
+        size_t current_tag_run_index = first_bit_index - (first_bit_index % this->encoded_start_every_k_run);
+        size_t move_tags = first_bit_index % this->encoded_start_every_k_run;
+
+        // Starting item index in the int_vector (not a bit location)
+        size_t item_index = this->encoded_runs_sd_starts_select(current_tag_run_index / this->encoded_start_every_k_run + 1);
+
+        while (move_tags > 0){
+            (void) this->encoded_runs_iv[item_index++];
+            move_tags--;
+        }
+
+        while (run_nums > 0) {
+            gbwt::size_type enc_val = this->encoded_runs_iv[item_index++];
+            pos_t decoded_pos = decode_run_length_compact(enc_val);
+            run_nums--;
+            unique_positions.push_back(gbwtgraph::Position::encode(decoded_pos).value);
+        }
+        std::sort(unique_positions.begin(), unique_positions.end());
+        unique_positions.erase(std::unique(unique_positions.begin(), unique_positions.end()), unique_positions.end());
+
+        std::cout << "Number of unique positions: " << unique_positions.size() << std::endl;
+        for (auto pos : unique_positions) {
+            std::cout << pos << ", ";
+        }
+        std::cout << std::endl;
+    }
+
     void TagArray::compressed_serialize_compact(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs){
         std::vector<gbwt::byte_type> encoded_runs;
         if (tag_runs.size() > 0) {
@@ -899,41 +935,7 @@ namespace panindexer {
         }
     }
 
-    void TagArray::query_compressed_compact(size_t start, size_t end, size_t &number_of_runs) {
-        size_t first_bit_index = this->bwt_intervals_rank(start + 1);
-        size_t end_bit_index = this->bwt_intervals_rank(end + 1);
-        auto run_nums = end_bit_index - first_bit_index + 1;
-        number_of_runs = run_nums;
-
-        std::vector<std::uint64_t> unique_positions;
-        unique_positions.reserve(run_nums);
-
-        size_t current_tag_run_index = first_bit_index - (first_bit_index % this->encoded_start_every_k_run);
-        size_t move_tags = first_bit_index % this->encoded_start_every_k_run;
-
-        // Starting item index in the int_vector (not a bit location)
-        size_t item_index = this->encoded_runs_sd_starts_select(current_tag_run_index / this->encoded_start_every_k_run + 1);
-
-        while (move_tags > 1){
-            (void) this->encoded_runs_iv[item_index++];
-            move_tags--;
-        }
-
-        while (run_nums > 0) {
-            gbwt::size_type enc_val = this->encoded_runs_iv[item_index++];
-            pos_t decoded_pos = decode_run_length_compact(enc_val);
-            run_nums--;
-            unique_positions.push_back(gbwtgraph::Position::encode(decoded_pos).value);
-        }
-        std::sort(unique_positions.begin(), unique_positions.end());
-        unique_positions.erase(std::unique(unique_positions.begin(), unique_positions.end()), unique_positions.end());
-
-        std::cout << "Number of unique positions: " << unique_positions.size() << std::endl;
-        for (auto pos : unique_positions) {
-            std::cout << pos << ", ";
-        }
-        std::cout << std::endl;
-    }
+    
 
     void TagArray::append_compact_run_streamed(pos_t value, uint16_t run_length, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file) {
         int max_tag_len = 1 << length_bits;

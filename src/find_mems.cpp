@@ -23,11 +23,12 @@ int main(int argc, char **argv) {
     double total_tag_time = 0.0;
 #endif
 
-    cerr << "Reading the rindex file" << endl;
+    cerr << "Reading the rindex file (encoded)" << endl;
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) { std::cerr << "Cannot open r-index: " << r_index_file << std::endl; std::exit(EXIT_FAILURE); }
+        r_index.load_encoded(rin);
     }
 
 

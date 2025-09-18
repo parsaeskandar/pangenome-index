@@ -16,6 +16,7 @@ int main(int argc, char **argv) {
     int threads = 8;
 
     FastLocate idx(rlbwt_file);
-    idx.serialize(std::cout);
+    // idx.serialize(std::cout);
+    idx.serialize_encoded(std::cout);
 
 }

@@ -626,9 +626,13 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
     FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
 
     size_t matched = 0;
+    std::cerr << "[search] Q='" << Q << "' len=" << len << std::endl;
     for (int i = static_cast<int>(len) - 1; i >= 0; --i) {
-        bint = fmd_index.backward_extend(bint, Q[i]);
+        bint = fmd_index.backward_extend_encoded(bint, Q[i]);
+        std::cerr << "  [search] i=" << i << " c='" << Q[i] << "' -> (k=" << bint.forward
+                  << ", l=" << bint.reverse << ", s=" << bint.size << ")" << std::endl;
         if (bint.size == 0) {
+            std::cerr << "  [search] terminated: size==0" << std::endl;
             break;
         }
         ++matched;
@@ -657,10 +661,15 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
         // bint = fmd_index.backward_extend(bint, pattern[x + min_len - 1]);
 //         std::cerr << "here" << std::endl;
-        for (j = x + min_len - 1; j >= x; --j) {
-            bint = fmd_index.backward_extend(bint, pattern[j]);
+        // std::cerr << "[find_mems] pattern='" << pattern << "' min_len=" << min_len
+        //           << " min_occ=" << min_occ << " x=" << x << std::endl;
+        for (j = x + min_len - 1; (int64_t)j >= (int64_t)x; --j) {
+            bint = fmd_index.backward_extend_encoded(bint, pattern[j]);
+            // std::cerr << "  [step1] j=" << j << " c='" << pattern[j] << "' -> (k=" << bint.forward
+            //           << ", l=" << bint.reverse << ", s=" << bint.size << ")" << std::endl;
 //            std::cerr << j << " " << (char) pattern[j] << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
             if (bint.size < min_occ || bint.size <= 0) {
+                std::cerr << "  [step1] break: size(" << bint.size << ") < min_occ(" << min_occ << ")" << std::endl;
                 return j + 1;
             }
             if (j == 0) break;
@@ -676,7 +685,9 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         for (j = x + min_len; j < len; ++j) {
 //            auto comp = fmd_index.complement(pattern[j]);
 
-            bint = fmd_index.forward_extend(bint, pattern[j]);
+            bint = fmd_index.forward_extend_encoded(bint, pattern[j]);
+            // std::cerr << "  [step2] j=" << j << " c='" << pattern[j] << "' -> (k=" << bint.forward
+            //           << ", l=" << bint.reverse << ", s=" << bint.size << ")" << std::endl;
 //            std::cerr << j << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
 
             // std::cerr << "next.size: " << next.size << " next " << std::endl;
@@ -697,6 +708,8 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         // std::cerr << "here3" << std::endl;
         // Report the MEM [x, j)
         auto e = j;
+        // std::cerr << "  [mem] emit start=" << x << " end=" << e << " bwt_start=" << bint2.forward
+        //           << " size=" << bint2.size << std::endl;
         output.push_back({x, e, bint2.forward, bint2.size});
 
         // if (j == len) return len;
@@ -707,7 +720,9 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
         
         for (j = e ; j > x; --j) {
-            back = fmd_index.backward_extend(back, pattern[j]);
+            back = fmd_index.backward_extend_encoded(back, pattern[j]);
+            // std::cerr << "  [step3] j=" << j << " c='" << pattern[j] << "' -> (k=" << back.forward
+            //           << ", l=" << back.reverse << ", s=" << back.size << ")" << std::endl;
             if (back.size < min_occ || back.size <= 0) return j+1;
         }
 
@@ -722,6 +737,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
 
         while (x < len){
+            std::cerr << "[find_all_mems] next from x=" << x << std::endl;
             x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
         }
 
@@ -729,6 +745,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 //        do {
 //            x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
 //        } while (x < len);
+        std::cerr << "[find_all_mems] total mems=" << mems.size() << std::endl;
 
         return mems;
     }

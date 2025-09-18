@@ -4,6 +4,7 @@
 //
 
 #include "../include/pangenome_index/r-index.hpp"
+#include <gbwt/utils.h>
 
 
 //TODO: MAKE THE copy, swap, ... function with the new variables
@@ -58,6 +59,103 @@ namespace panindexer {
             tag(TAG), version(VERSION),
             max_length(1),
             flags(0) {
+    }
+
+    // EncodedBlock helper implementations
+    void FastLocate::EncodedBlock::read_cumulative(gbwt::size_type &loc, size_t cum_nuc[6]) const {
+        // cum_nuc is in nuc order, not sym_map order
+        for (size_t i = 0; i < 6; ++i) { cum_nuc[i] = 0; }
+        // Read cum_len entries (sym_map order indices 0..cum_len-1) and place into nuc order
+        for (size_t idx = 0; idx < this->cum_len; ++idx) {
+            size_t val = static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc));
+            // find the byte symbol whose sym_map equals idx
+            // We know nuc set is small (<=6), so scan nuc
+            for (size_t i = 0; i < 6; ++i) {
+                size_t sym = static_cast<size_t>(nuc[i]);
+                if ((*this->sym_map_ptr)[sym] == idx) {
+                    cum_nuc[i] = val;
+                    break;
+                }
+            }
+        }
+        if (!this->hasN) { cum_nuc[4] = 0; }
+    }
+
+    void FastLocate::EncodedBlock::skip_header(gbwt::size_type &loc) const {
+        for (size_t i = 0; i < 6; ++i) {
+            if (!this->hasN && i == 4) { continue; }
+            (void) gbwt::ByteCode::read(*this->stream, loc);
+        }
+    }
+
+    size_t FastLocate::EncodedBlock::char_at(gbwt::size_type loc, size_t end_pos, size_t rel) const {
+        gbwt::size_type it = loc;
+        this->skip_header(it);
+        size_t acc = 0;
+        while (static_cast<size_t>(it) < end_pos) {
+            gbwt::byte_type header = (*this->stream)[it++];
+            int code = (header >> 5) & 0x7;
+            size_t prefix = header & 0x1F;
+            size_t run_length;
+            if (prefix < 31) {
+                run_length = prefix + 1;
+            } else if (static_cast<size_t>(it) >= end_pos) {
+                run_length = 32;
+            } else {
+                run_length = 32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, it));
+            }
+            if (acc + run_length > rel) { return static_cast<size_t>(code); }
+            acc += run_length;
+        }
+        // Fallback: return code of last run header before end_pos
+        gbwt::byte_type last_header = (*this->stream)[end_pos - 1];
+        return static_cast<size_t>((last_header >> 5) & 0x7);
+    }
+
+    size_t FastLocate::EncodedBlock::rank_of_code(gbwt::size_type &loc, size_t end_pos, int target_code, size_t rel, size_t &runnum, size_t &cur) const {
+        size_t rank = 0; runnum = 0; cur = 0;
+        while (static_cast<size_t>(loc) < end_pos) {
+            gbwt::byte_type header = (*this->stream)[loc++];
+            int code = (header >> 5) & 0x7;
+            size_t prefix = header & 0x1F;
+            size_t run_length;
+            if (static_cast<size_t>(loc) >= end_pos) {
+                run_length = 32;
+            } else {
+                run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc))));
+            }
+            if (code == target_code) {
+                if (cur + run_length > rel) { rank += (rel - cur); break; }
+                rank += run_length;
+            }
+            cur += run_length; runnum++;
+            if (cur > rel) { break; }
+        }
+        return rank;
+    }
+
+    void FastLocate::EncodedBlock::ranks_at(gbwt::size_type &loc, size_t end_pos, size_t rel, size_t out[6]) const {
+        size_t cum[6] = {0,0,0,0,0,0};
+        this->read_cumulative(loc, cum);
+        for (size_t i = 0; i < 6; ++i) { out[i] = cum[i]; }
+        size_t cur = 0;
+        while (static_cast<size_t>(loc) < end_pos) {
+            gbwt::byte_type header = (*this->stream)[loc++];
+            int code = (header >> 5) & 0x7;
+            size_t prefix = header & 0x1F;
+            size_t run_length;
+            if (prefix < 31) {
+                run_length = prefix + 1;
+            } else if (static_cast<size_t>(loc) >= end_pos) {
+                run_length = 32;
+            } else {
+                run_length = 32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc));
+            }
+            if (cur + run_length > rel) { out[code] += (rel - cur); return; }
+            out[code] += run_length;
+            cur += run_length;
+        }
+        // If we reach here, rel is at end of block; out already equals totals
     }
 
     size_type
@@ -129,6 +227,15 @@ namespace panindexer {
             this->samples.swap(another.samples);
             this->last.swap(another.last);
             this->last_to_run.swap(another.last_to_run);
+            this->sym_map.swap(another.sym_map);
+            this->C.swap(another.C);
+            this->blocks.swap(another.blocks);
+            this->blocks_start_pos.swap(another.blocks_start_pos);
+            std::swap(this->sequence_size, another.sequence_size);
+            this->blocks_encoded_start_bits.swap(another.blocks_encoded_start_bits);
+            this->blocks_encoded_stream.swap(another.blocks_encoded_stream);
+            std::swap(this->encoded_block_size, another.encoded_block_size);
+            std::swap(this->encoded_has_N, another.encoded_has_N);
         }
     }
 
@@ -146,6 +253,15 @@ namespace panindexer {
             this->samples = std::move(source.samples);
             this->last = std::move(source.last);
             this->last_to_run = std::move(source.last_to_run);
+            this->sym_map = std::move(source.sym_map);
+            this->C = std::move(source.C);
+            this->blocks_start_pos = std::move(source.blocks_start_pos);
+            this->sequence_size = source.sequence_size;
+            this->blocks = std::move(source.blocks);
+            this->blocks_encoded_start_bits = std::move(source.blocks_encoded_start_bits);
+            this->blocks_encoded_stream = std::move(source.blocks_encoded_stream);
+            this->encoded_block_size = source.encoded_block_size;
+            this->encoded_has_N = source.encoded_has_N;
         }
         return *this;
     }
@@ -174,6 +290,87 @@ namespace panindexer {
 
         for (const auto &block : blocks) {
             written_bytes += block.serialize(out, child, "block");
+        }
+
+        sdsl::structure_tree::add_size(child, written_bytes);
+        return written_bytes;
+    }
+
+    // Encoded blocks serialization
+    FastLocate::size_type
+    FastLocate::serialize_encoded(std::ostream &out, sdsl::structure_tree_node *v, std::string name) const {
+        sdsl::structure_tree_node *child = sdsl::structure_tree::add_child(v, name, sdsl::util::class_name(*this));
+        size_type written_bytes = 0;
+
+        // Common metadata
+        Header hdr = this->header;
+        hdr.set(Header::ENCODED_BLOCKS);
+        written_bytes += hdr.serialize(out, child, "header");
+        written_bytes += this->samples.serialize(out, child, "samples");
+        written_bytes += this->last.serialize(out, child, "last");
+        written_bytes += this->last_to_run.serialize(out, child, "last_to_run");
+        written_bytes += this->sym_map.serialize(out, child, "sym_map");
+        written_bytes += this->C.serialize(out, child, "C");
+        written_bytes += this->blocks_start_pos.serialize(out, child, "blocks_start_pos");
+        written_bytes += sdsl::write_member(sequence_size, out, child, "sequence_size");
+
+        // Serialize encoded_block_size
+        size_t enc_block_sz = (this->encoded_block_size != 0 ? this->encoded_block_size : this->block_size);
+        written_bytes += sdsl::write_member(enc_block_sz, out, child, "encoded_block_size");
+
+        // Determine and serialize global mask: whether 'N' exists by scanning runs
+        bool hasN = false;
+        for (const auto &blk : this->blocks) {
+            for (const auto &run : blk.runs) {
+                if (run.first == static_cast<size_t>('N')) { hasN = true; break; }
+            }
+            if (hasN) break;
+        }
+        std::uint8_t hasN_byte = static_cast<std::uint8_t>(hasN ? 1 : 0);
+        written_bytes += sdsl::write_member(hasN_byte, out, child, "encoded_has_N");
+
+        // Build stream from Run_blocks (always rebuild to ensure new format)
+        std::vector<gbwt::byte_type> stream;
+        sdsl::int_vector<0> start_bits_iv;
+        std::vector<size_t> bit_offsets;
+        bit_offsets.reserve(this->blocks.size());
+        size_t bitpos = 0;
+        for (size_t bi = 0; bi < this->blocks.size(); ++bi) {
+            bit_offsets.push_back(bitpos);
+            // Write cumulative ranks in sym_map index order [0..C.size())
+            for (size_t idx = 0; idx < this->blocks[bi].get_cum_ranks().size(); ++idx) {
+                size_t val = this->blocks[bi].get_cum_ranks()[idx];
+                gbwt::ByteCode::write(stream, static_cast<gbwt::size_type>(val));
+            }
+            // Encode runs
+            for (const auto &run : this->blocks[bi].runs) {
+                size_t symbol = run.first;
+                size_t run_length = run.second;
+                int code = this->symbol_to_code(symbol);
+                size_t prefix = std::min<size_t>(run_length - 1, 31);
+                gbwt::byte_type header = static_cast<gbwt::byte_type>(((code & 0x7) << 5) | (prefix & 0x1F));
+                stream.push_back(header);
+                if (prefix == 31 && run_length > 32) {
+                    gbwt::ByteCode::write(stream, static_cast<gbwt::size_type>(run_length - 32));
+                }
+            }
+            bitpos = stream.size();
+        }
+        // Build int_vector<0> of start bit offsets
+        start_bits_iv.width(sdsl::bits::length(bit_offsets.empty() ? 0 : bit_offsets.back()));
+        start_bits_iv.resize(bit_offsets.size());
+        for (size_t i = 0; i < bit_offsets.size(); ++i) start_bits_iv[i] = bit_offsets[i];
+
+        const sdsl::int_vector<0> &starts_iv = start_bits_iv;
+        const std::vector<gbwt::byte_type> &bytes = stream;
+
+        written_bytes += starts_iv.serialize(out, child, "blocks_encoded_start_bits");
+        // Write stream size and bytes
+        size_t bytes_sz = bytes.size();
+        written_bytes += sdsl::write_member(bytes_sz, out, child, "blocks_encoded_stream_size");
+        if (bytes_sz > 0) {
+            out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes_sz));
+            written_bytes += bytes_sz;
         }
 
         sdsl::structure_tree::add_size(child, written_bytes);
@@ -209,11 +406,75 @@ namespace panindexer {
     }
 
     void
+    FastLocate::load_encoded(std::istream &in) {
+        // Remember stream start
+        std::istream::pos_type start_pos = in.tellg();
+        this->header.load(in);
+        // Validate tag/version but do not enforce flags here
+        if (this->header.tag != Header::TAG) {
+            throw sdsl::simple_sds::InvalidData("FastLocate: Invalid tag");
+        }
+        if (this->header.version != Header::VERSION) {
+            std::string msg =
+                    std::string("FastLocate: Expected v") + std::to_string(Header::VERSION) +
+                    std::string(", got v") + std::to_string(this->header.version);
+            throw sdsl::simple_sds::InvalidData(msg);
+        }
+        // Fallback: if not encoded, rewind and load in standard format
+        if ((this->header.flags & Header::ENCODED_BLOCKS) == 0) {
+            in.clear();
+            in.seekg(start_pos);
+            this->load(in);
+            return;
+        }
+        this->header.setVersion();
+
+        this->samples.load(in);
+        this->last.load(in);
+        this->last_to_run.load(in);
+
+        this->sym_map.load(in);
+        this->C.load(in);
+
+        sdsl::load(this->blocks_start_pos, in);
+        sdsl::read_member(this->sequence_size, in);
+
+        // encoded block size
+        sdsl::read_member(this->encoded_block_size, in);
+
+        // Load global mask (whether 'N' exists)
+        std::uint8_t hasN_byte = 0;
+        sdsl::read_member(hasN_byte, in);
+        this->encoded_has_N = (hasN_byte != 0);
+
+        // Load starts and stream
+        this->blocks_encoded_start_bits.load(in);
+        size_t bytes_sz = 0;
+        sdsl::read_member(bytes_sz, in);
+        this->blocks_encoded_stream.resize(bytes_sz);
+        if (bytes_sz > 0) {
+            in.read(reinterpret_cast<char*>(this->blocks_encoded_stream.data()), static_cast<std::streamsize>(bytes_sz));
+        }
+        // Clear materialized blocks to save memory in encoded path
+        this->blocks.clear();
+        this->block_size = (this->encoded_block_size != 0 ? this->encoded_block_size : this->block_size);
+    }
+
+    void
     FastLocate::copy(const FastLocate &source) {
         this->header = source.header;
         this->samples = source.samples;
         this->last = source.last;
         this->last_to_run = source.last_to_run;
+        this->sym_map = source.sym_map;
+        this->C = source.C;
+        this->blocks_start_pos = source.blocks_start_pos;
+        this->sequence_size = source.sequence_size;
+        this->blocks = source.blocks;
+        this->blocks_encoded_start_bits = source.blocks_encoded_start_bits;
+        this->blocks_encoded_stream = source.blocks_encoded_stream;
+        this->encoded_block_size = source.encoded_block_size;
+        this->encoded_has_N = source.encoded_has_N;
     }
 
 //------------------------------------------------------------------------------
@@ -245,16 +506,42 @@ namespace panindexer {
     }
 
 
-    size_t FastLocate::bwt_char_at(size_t idx) {
+    size_t FastLocate::bwt_char_at(size_t idx) const {
         auto iter = this->blocks_start_pos.predecessor(idx);
         auto res = this->blocks[iter->first].bwt_char_at(idx - iter->second);
         return res;
+    }
+
+    // Encoded: decode runs on the fly
+    size_t FastLocate::bwt_char_at_encoded(size_t idx) const {
+        if (!this->is_encoded()) { return this->bwt_char_at(idx); }
+        auto iter = this->blocks_start_pos.predecessor(idx);
+        size_t block_id = iter->first;
+        size_t block_start_pos = iter->second;
+        size_t rel = idx - block_start_pos;
+
+        if (block_id >= this->blocks_encoded_start_bits.size()) { return 0; }
+        gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
+        size_t end_pos = (block_id + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[block_id + 1] : this->blocks_encoded_stream.size();
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        size_t code = blk.char_at(loc, end_pos, rel);
+        return this->code_to_symbol(static_cast<int>(code));
     }
 
     // This function provide backward navigation in the BWT
     std::pair <size_t, size_t> FastLocate::psi(size_t idx) {
         size_t symbol = this->bwt_char_at(idx);
         return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol)};
+    }
+
+    std::pair<size_t, size_t> FastLocate::psi_encoded(size_t idx) {
+        std::cerr << "psi_encoded: idx=" << idx << std::endl;
+        size_t symbol = this->bwt_char_at_encoded(idx);
+        std::cerr << "symbol=" << symbol << std::endl;
+        size_t rid = 0, cur = 0;
+        size_t next_pos = this->C[this->sym_map[symbol]] + this->rankAt_encoded(idx, symbol, rid, cur);
+        std::cerr << "next_pos=" << next_pos << std::endl;
+        return {symbol, next_pos};
     }
 
     std::pair <size_t, size_t> FastLocate::psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position) {
@@ -264,6 +551,8 @@ namespace panindexer {
         size_t next_pos = this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol, run_id, current_position);
         return {symbol, next_pos};
     }
+
+    
 
 
     // current_position Tracks how far we've gone through the BWT
@@ -280,6 +569,28 @@ namespace panindexer {
         return cumulative_rank;
     }
 
+    size_t FastLocate::rankAt_encoded(size_t pos, size_t symbol, size_t &run_id, size_t &current_position) const {
+        if (!this->is_encoded()) { return this->rankAt(pos, symbol, run_id, current_position); }
+        auto iter = this->blocks_start_pos.predecessor(pos);
+        size_t block_id = iter->first;
+        size_t rel = pos - iter->second;
+
+        gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
+        size_t end_pos = (block_id + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[block_id + 1] : this->blocks_encoded_stream.size();
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        size_t cum[6] = {0,0,0,0,0,0};
+        blk.read_cumulative(loc, cum);
+        int target_code = this->symbol_to_code(symbol);
+
+        size_t runnum = 0; size_t cur = 0;
+        size_t rank = blk.rank_of_code(loc, end_pos, target_code, rel, runnum, cur);
+        run_id = block_id * (this->encoded_block_size ? this->encoded_block_size : this->block_size) + runnum;
+        current_position = iter->second + cur;
+        size_t cum_idx = static_cast<size_t>(target_code);
+        size_t cumulative_rank = rank + cum[cum_idx];
+        return cumulative_rank;
+    }
+
 
     std::vector<size_t> FastLocate::rank_at_cached(size_t pos) const {
         auto iter = this->blocks_start_pos.predecessor(pos);
@@ -292,6 +603,46 @@ namespace panindexer {
         }
         return rank_vec;
     }
+
+
+    // std::vector<size_t> FastLocate::rank_at_cached_encoded(size_t pos) const {
+    //     if (!this->is_encoded()) { return this->rank_at_cached(pos); }
+    //     auto iter = this->blocks_start_pos.predecessor(pos);
+    //     (void) iter; // keep symmetry with rank_at_cached
+    //     std::vector<size_t> rank_vec(this->C.size(), 0);
+    //     for (size_t i = 0; i < this->C.size(); i++) {
+    //         size_t run_id = 0;
+    //         size_t cur_pos = 0;
+    //         rank_vec[i] = this->rankAt_encoded(pos, static_cast<size_t>(nuc[i]), run_id, cur_pos);
+    //     }
+    //     return rank_vec;
+    // }
+
+    std::vector<size_t> FastLocate::rank_at_cached_encoded(size_t pos) const {
+        if (!this->is_encoded()) { return this->rank_at_cached(pos); }
+        auto iter = this->blocks_start_pos.predecessor(pos);
+        gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[iter->first]);
+        size_t end_pos = (iter->first + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[iter->first + 1] : this->blocks_encoded_stream.size();
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        size_t rel = pos - iter->second;
+        size_t counts6[6] = {0,0,0,0,0,0};
+        blk.ranks_at(loc, end_pos, rel, counts6);
+        // Follow rank_at_cached indexing: vector size C, entries correspond to nuc[i] for i < C.size()
+        std::vector<size_t> rank_vec(this->C.size(), 0);
+        // std::cerr << "counts6: ";
+        // for (size_t i = 0; i < 6; i++) { std::cerr << counts6[i] << " "; }
+        std::cerr << std::endl;
+        std::cerr << "this->C.size(): " << this->C.size() << std::endl;
+        for (size_t i = 0; i < this->C.size(); i++) {
+            // if (!this->encoded_has_N && i == 4) { rank_vec[i] = 0; }
+            // else { rank_vec[i] = counts6[i]; }
+            rank_vec[i] = counts6[this->sym_map[nuc[i]]];
+            std::cerr << "rank_vec[" << i << "]=" << rank_vec[i] << std::endl;
+        }
+        return rank_vec;
+    }
+
+
 
 
 
@@ -318,34 +669,6 @@ namespace panindexer {
         bool first_run_found = false;      // Track whether we've found the first run
 
         range.first = this->rankAt(range.first, sym, run_id, current_position);
-//        std::cerr << "LF function range first " << range.first << std::endl;
-
-        // Check if the first run contains the symbol and overlaps with range.first
-//        if (current_position > start_offset) {
-//            first_run_found = true;
-//            if (sym == this->buff_reader->read_sym(run_id)) {  // Compare the symbol of the current run
-//                starts_with_to = true;  // The range starts with the symbol
-//                first_run = run_id; // Set the first run id
-//            }
-//        }
-
-        // Rank for the end of the range
-//        while (run_id < this->buff_reader->size() && current_position <= range.second) {
-//            size_t symbol_in_run = 0;
-//            size_t freq_in_run = 0;
-//            this->buff_reader->read_run(run_id, symbol_in_run, freq_in_run);  // Read the run symbol and its frequency
-//
-//            ++run_id;  // Move to the next run
-//            current_position += freq_in_run;  // Increment the BWT position
-//
-//            if (symbol_in_run == sym && first_run == std::numeric_limits<size_type>::max()) {
-//                if (!first_run_found) {
-//                    starts_with_to = true;
-//                }
-//                first_run = run_id - 1;  // Set the first run if not found
-//            }
-//            first_run_found = true;
-//        }
 
         // Rank the second part of the range
         run_id = 0;
@@ -362,6 +685,64 @@ namespace panindexer {
 
 
         return range;  // Return the updated range
+    }
+
+    // Encoded LF
+    range_type FastLocate::LF_encoded(range_type range, size_t sym, bool &starts_with_to, size_t &first_run) const {
+        if (!this->is_encoded()) { return this->LF(range, sym, starts_with_to, first_run); }
+        if (range.first > range.second) { return {1, 0}; }
+        starts_with_to = false;
+        first_run = std::numeric_limits<size_type>::max();
+
+        // Mirror LF using encoded ranks
+        size_t run_id = 0;
+        size_t current_position = 0;
+        range.first = this->rankAt_encoded(range.first, sym, run_id, current_position);
+
+        run_id = 0;
+        current_position = 0;
+        size_t sym_inside = this->rankAt_encoded(range.second + 1, sym, run_id, current_position) - range.first;
+
+        if (sym_inside == 0) {
+            return {1, 0};
+        }
+        range.first += this->C[this->sym_map[sym]];
+        range.second = range.first + sym_inside - 1;
+
+        return range;
+    }
+
+    FastLocate::bi_interval FastLocate::backward_extend_encoded(const bi_interval& bint, size_t a) {
+        if (!this->is_encoded()) { return this->backward_extend(bint, a); }
+        size_t k = bint.forward;
+        size_t k_prime = bint.reverse;
+        int64_t s = bint.size;
+        int64_t b = 0;
+
+
+        auto rank_cache_ks = rank_at_cached_encoded(k + s);
+        auto rank_cache_k = rank_at_cached_encoded(k);
+
+        while (nuc[b] < this->complement(a)) {
+            std::cerr << "nuc[b]=" << nuc[b] << std::endl;
+            k_prime += (rank_cache_ks[this->sym_map[this->complement(nuc[b])]] - rank_cache_k[this->sym_map[this->complement(nuc[b])]]);
+            b++;
+        }
+
+        auto rank_ks = rank_cache_ks[this->sym_map[a]];
+        auto rank_k = rank_cache_k[this->sym_map[a]];
+        if (rank_k >= rank_ks) { return bi_interval(0, 0, 0); }
+        s = rank_ks - rank_k;
+        k = rank_k + this->C[this->sym_map[a]];
+        return bi_interval(k, k_prime, s);
+    }
+
+    FastLocate::bi_interval FastLocate::forward_extend_encoded(const bi_interval& bint, size_t symbol) {
+        if (!this->is_encoded()) { return this->forward_extend(bint, symbol); }
+        bi_interval tmp = bi_interval(bint.reverse, bint.forward, bint.size);
+        size_t comp = this->complement(symbol);
+        tmp = this->backward_extend_encoded(tmp, comp);
+        return bi_interval(tmp.reverse, tmp.forward, tmp.size);
     }
 
 
@@ -753,7 +1134,12 @@ namespace panindexer {
 //    }
 
     size_t FastLocate::tot_runs() const {
-        return this->block_size * (this->blocks.size() - 1) + this->blocks.back().get_run_nums();
+        if (!this->blocks.empty()) {
+            return this->block_size * (this->blocks.size() - 1) + this->blocks.back().get_run_nums();
+        }
+        // Encoded path: estimate from last_to_run size
+        if (this->samples.size() > 0) return this->samples.size();
+        return 0;
     }
 
     range_type FastLocate::extend(range_type state, size_t sym, size_type &first) const {
@@ -779,6 +1165,68 @@ namespace panindexer {
             }
         }
 
+        return state;
+    }
+
+    void FastLocate::run_id_and_offset_at(size_t pos, size_t &run_id, size_t &offset_of_first) const {
+        auto iter = this->blocks_start_pos.predecessor(pos);
+        size_t block_id = iter->first; size_t block_start = iter->second;
+        if (!this->blocks.empty()) {
+            size_t cur_pos = 0;
+            auto run_num = this->blocks[block_id].run_id_at(pos - block_start, cur_pos);
+            run_id = block_id * this->block_size + run_num;
+            offset_of_first = block_start + cur_pos;
+            return;
+        }
+        // Encoded
+        gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        blk.skip_header(loc);
+        size_t cur = 0; size_t runnum = 0;
+        while (true) {
+            gbwt::byte_type header = this->blocks_encoded_stream[loc++];
+            size_t prefix = header & 0x1F;
+            size_t run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(this->blocks_encoded_stream, loc))));
+            if (cur + run_length > pos - block_start) {
+                run_id = block_id * (this->encoded_block_size ? this->encoded_block_size : this->block_size) + runnum;
+                offset_of_first = block_start + cur;
+                return;
+            }
+            cur += run_length; runnum++;
+        }
+    }
+
+    size_t FastLocate::last_run_size_global() const {
+        if (!this->blocks.empty()) { return this->blocks.back().last_run_size(); }
+        // Encoded: scan last block to get last run length
+        if (this->blocks_encoded_start_bits.size() == 0) return 0;
+        size_t block_id = this->blocks_encoded_start_bits.size() - 1;
+        gbwt::size_type loc2 = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
+        size_t end_pos2 = this->blocks_encoded_stream.size();
+        EncodedBlock blk2(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        blk2.skip_header(loc2);
+        size_t last_len = 0;
+        while (static_cast<size_t>(loc2) < end_pos2 && (block_id + 1 >= this->blocks_encoded_start_bits.size() || static_cast<size_t>(loc2) < this->blocks_encoded_start_bits[block_id + 1])) {
+            gbwt::byte_type header = this->blocks_encoded_stream[loc2++];
+            size_t prefix = header & 0x1F;
+            size_t run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(this->blocks_encoded_stream, loc2))));
+            last_len = run_length;
+        }
+        return last_len;
+    }
+
+    range_type FastLocate::extend_encoded(range_type state, size_t sym, size_type &first) const {
+        if (state.second < state.first || (this->sym_map[sym] == 0)) {
+            range_type empty(0, -1);
+            return empty;
+        }
+        bool starts_with_node = false;
+        size_t run_id = std::numeric_limits<size_type>::max();
+        state = this->LF_encoded(state, sym, starts_with_node, run_id);
+        if (state.first >= state.second) {
+            if (starts_with_node) { first++; }
+            else { first = this->getSample(run_id) - 1; }
+        }
         return state;
     }
 
@@ -828,6 +1276,51 @@ namespace panindexer {
         std::sort(result.begin(), result.end());
         result.resize(std::unique(result.begin(), result.end()) - result.begin());
 
+        return result;
+    }
+
+    std::vector<FastLocate::size_type>
+    FastLocate::locate_encoded(range_type state, size_type first) const {
+        std::vector<size_type> result;
+        if (state.second < state.first) { return result; }
+        result.reserve(state.second - state.first + 1);
+
+        size_type offset_of_first = state.first;
+        if (first == NO_POSITION)
+        {
+            auto iter = this->blocks_start_pos.predecessor(state.first);
+            size_t block_id = iter->first; size_t block_start = iter->second;
+            std::uint64_t bitloc = this->blocks_encoded_start_bits[block_id];
+            EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+            blk.skip_header(bitloc);
+            size_t cur = 0; size_t runnum = 0;
+            while (true) {
+                gbwt::byte_type header = this->blocks_encoded_stream[bitloc / 8];
+                bitloc += 8;
+                int code = (header >> 5) & 0x7;
+                size_t prefix = header & 0x1F;
+                size_t run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(this->blocks_encoded_stream, bitloc))));
+                if (cur + run_length > state.first - block_start) {
+                    size_type global_run_id = block_id * (this->encoded_block_size ? this->encoded_block_size : this->block_size) + runnum;
+                    offset_of_first = block_start + cur;
+                    first = this->getSample(global_run_id);
+                    break;
+                }
+                cur += run_length; runnum++;
+            }
+        }
+
+        while (offset_of_first < state.first) {
+            first = this->locateNext(first);
+            offset_of_first++;
+        }
+        result.push_back(this->seqId(first));
+        for (size_type i = state.first + 1; i <= state.second; i++) {
+            first = this->locateNext(first);
+            result.push_back(this->seqId(first));
+        }
+        std::sort(result.begin(), result.end());
+        result.resize(std::unique(result.begin(), result.end()) - result.begin());
         return result;
     }
 

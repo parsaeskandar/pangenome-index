@@ -334,13 +334,8 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
 
     if (index == last_run_index){
 
-        std::cerr << "hit last run in block " << r_index.blocks.size() << std::endl;
-        // what is the last run size
-        auto last_block = r_index.blocks[r_index.blocks.size() - 1];
-        if (last_block.runs.empty()){
-            std::cerr << "last block is empty " << std::endl;
-        } else {
-            int last_run_size = r_index.blocks.back().last_run_size();
+        std::cerr << "hit last run" << std::endl;
+        int last_run_size = r_index.last_run_size_global();
 
 
             // have to just traverse the last run
@@ -362,7 +357,7 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
         }
 
 
-    }
+    // (continue inside function)
 
     // we have the tags we want to extract from each file. now we extract the tags for each index
     std::vector<std::vector<std::pair<pos_t, uint16_t>>> run_tags = reader.extract_requested_tags(thread_id, request);
@@ -466,11 +461,15 @@ int main(int argc, char **argv) {
     }
 
 
-    cerr << "Reading the whole genome r-index file" << endl;
+    cerr << "Reading the whole genome r-index file (encoded)" << endl;
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) {
+            std::cerr << "Cannot open r-index: " << r_index_file << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
+        r_index.load_encoded(rin);
     }
 
 
@@ -642,12 +641,8 @@ int main(int argc, char **argv) {
     // having to find the run and index of the BWT position num_endmarkers
     // iter.first is the block number num_endmarkers is in
     // iter.second is the offset of the beginning of the block
-    auto iter = r_index.blocks_start_pos.predecessor(num_endmarkers);
-
-    size_t cur_pos = 0;
-    auto run_num = r_index.blocks[iter->first].run_id_at(num_endmarkers - iter->second, cur_pos);
-    auto run_id = iter->first * r_index.block_size + run_num; // this is the run that the num_endmarkers end in
-    auto offset_of_first = iter->second + cur_pos;
+    size_t run_id = 0; size_t offset_of_first = 0;
+    r_index.run_id_and_offset_at(num_endmarkers, run_id, offset_of_first);
 
     // we want a job handling the remaining of the run_id run
     auto first = r_index.getSample(run_id);
