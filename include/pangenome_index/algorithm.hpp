@@ -669,7 +669,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
             //           << ", l=" << bint.reverse << ", s=" << bint.size << ")" << std::endl;
 //            std::cerr << j << " " << (char) pattern[j] << " " << bint.forward << " " << bint.reverse << " " << bint.size << std::endl;
             if (bint.size < min_occ || bint.size <= 0) {
-                std::cerr << "  [step1] break: size(" << bint.size << ") < min_occ(" << min_occ << ")" << std::endl;
+                // std::cerr << "  [step1] break: size(" << bint.size << ") < min_occ(" << min_occ << ")" << std::endl;
                 return j + 1;
             }
             if (j == 0) break;
@@ -737,7 +737,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
 
 
         while (x < len){
-            std::cerr << "[find_all_mems] next from x=" << x << std::endl;
+            // std::cerr << "[find_all_mems] next from x=" << x << std::endl;
             x = find_mems_function(pattern, min_len, min_occ, x, fmd_index, mems);
         }
 

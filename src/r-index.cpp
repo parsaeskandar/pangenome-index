@@ -631,13 +631,13 @@ namespace panindexer {
         std::vector<size_t> rank_vec(this->C.size(), 0);
         // std::cerr << "counts6: ";
         // for (size_t i = 0; i < 6; i++) { std::cerr << counts6[i] << " "; }
-        std::cerr << std::endl;
-        std::cerr << "this->C.size(): " << this->C.size() << std::endl;
+        // std::cerr << std::endl;
+        // std::cerr << "this->C.size(): " << this->C.size() << std::endl;
         for (size_t i = 0; i < this->C.size(); i++) {
             // if (!this->encoded_has_N && i == 4) { rank_vec[i] = 0; }
             // else { rank_vec[i] = counts6[i]; }
             rank_vec[i] = counts6[this->sym_map[nuc[i]]];
-            std::cerr << "rank_vec[" << i << "]=" << rank_vec[i] << std::endl;
+            // std::cerr << "rank_vec[" << i << "]=" << rank_vec[i] << std::endl;
         }
         return rank_vec;
     }
@@ -724,7 +724,7 @@ namespace panindexer {
         auto rank_cache_k = rank_at_cached_encoded(k);
 
         while (nuc[b] < this->complement(a)) {
-            std::cerr << "nuc[b]=" << nuc[b] << std::endl;
+            // std::cerr << "nuc[b]=" << nuc[b] << std::endl;
             k_prime += (rank_cache_ks[this->sym_map[this->complement(nuc[b])]] - rank_cache_k[this->sym_map[this->complement(nuc[b])]]);
             b++;
         }

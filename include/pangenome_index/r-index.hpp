@@ -171,7 +171,7 @@ namespace panindexer {
                 this->character_cum_ranks.resize(source.size());
                 for (size_t i = 0; i < this->character_cum_ranks.size(); i++) {
                     this->character_cum_ranks[i] = source[i];
-                    std::cerr << "character_cum_ranks[" << i << "]=" << this->character_cum_ranks[i] << std::endl;
+                    // std::cerr << "character_cum_ranks[" << i << "]=" << this->character_cum_ranks[i] << std::endl;
                 }
             }
 

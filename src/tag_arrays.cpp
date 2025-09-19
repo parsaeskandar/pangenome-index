@@ -868,7 +868,7 @@ namespace panindexer {
         // Starting item index in the int_vector (not a bit location)
         size_t item_index = this->encoded_runs_sd_starts_select(current_tag_run_index / this->encoded_start_every_k_run + 1);
 
-        while (move_tags > 0){
+        while (move_tags > 1){
             (void) this->encoded_runs_iv[item_index++];
             move_tags--;
         }
