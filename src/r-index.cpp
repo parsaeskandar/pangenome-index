@@ -83,7 +83,7 @@ namespace panindexer {
 
     void FastLocate::EncodedBlock::skip_header(gbwt::size_type &loc) const {
         for (size_t i = 0; i < 6; ++i) {
-            if (!this->hasN && i == 4) { continue; }
+            // if (!this->hasN && i == 4) { continue; }
             (void) gbwt::ByteCode::read(*this->stream, loc);
         }
     }
@@ -99,8 +99,6 @@ namespace panindexer {
             size_t run_length;
             if (prefix < 31) {
                 run_length = prefix + 1;
-            } else if (static_cast<size_t>(it) >= end_pos) {
-                run_length = 32;
             } else {
                 run_length = 32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, it));
             }
@@ -119,11 +117,9 @@ namespace panindexer {
             int code = (header >> 5) & 0x7;
             size_t prefix = header & 0x1F;
             size_t run_length;
-            if (static_cast<size_t>(loc) >= end_pos) {
-                run_length = 32;
-            } else {
-                run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc))));
-            }
+
+            run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc))));
+            
             if (code == target_code) {
                 if (cur + run_length > rel) { rank += (rel - cur); break; }
                 rank += run_length;
@@ -140,16 +136,17 @@ namespace panindexer {
         for (size_t i = 0; i < 6; ++i) { out[i] = cum[i]; }
         size_t cur = 0;
         while (static_cast<size_t>(loc) < end_pos) {
-            gbwt::byte_type header = (*this->stream)[loc++];
+            gbwt::byte_type header = (*this->stream)[loc];
+            loc++;
             int code = (header >> 5) & 0x7;
             size_t prefix = header & 0x1F;
             size_t run_length;
             if (prefix < 31) {
                 run_length = prefix + 1;
-            } else if (static_cast<size_t>(loc) >= end_pos) {
-                run_length = 32;
             } else {
-                run_length = 32 + static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc));
+                // auto loc_before = loc;
+                auto extra = static_cast<size_t>(gbwt::ByteCode::read(*this->stream, loc));
+                run_length = 32 + extra;
             }
             if (cur + run_length > rel) { out[code] += (rel - cur); return; }
             out[code] += run_length;
@@ -338,6 +335,7 @@ namespace panindexer {
         for (size_t bi = 0; bi < this->blocks.size(); ++bi) {
             bit_offsets.push_back(bitpos);
             // Write cumulative ranks in sym_map index order [0..C.size())
+            // TODO: check this when we don't have N
             for (size_t idx = 0; idx < this->blocks[bi].get_cum_ranks().size(); ++idx) {
                 size_t val = this->blocks[bi].get_cum_ranks()[idx];
                 gbwt::ByteCode::write(stream, static_cast<gbwt::size_type>(val));
@@ -350,7 +348,7 @@ namespace panindexer {
                 size_t prefix = std::min<size_t>(run_length - 1, 31);
                 gbwt::byte_type header = static_cast<gbwt::byte_type>(((code & 0x7) << 5) | (prefix & 0x1F));
                 stream.push_back(header);
-                if (prefix == 31 && run_length > 32) {
+                if (prefix == 31) {
                     gbwt::ByteCode::write(stream, static_cast<gbwt::size_type>(run_length - 32));
                 }
             }
@@ -523,7 +521,7 @@ namespace panindexer {
         if (block_id >= this->blocks_encoded_start_bits.size()) { return 0; }
         gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
         size_t end_pos = (block_id + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[block_id + 1] : this->blocks_encoded_stream.size();
-        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, 6, &this->sym_map);
         size_t code = blk.char_at(loc, end_pos, rel);
         return this->code_to_symbol(static_cast<int>(code));
     }
@@ -577,7 +575,7 @@ namespace panindexer {
 
         gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
         size_t end_pos = (block_id + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[block_id + 1] : this->blocks_encoded_stream.size();
-        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, 6, &this->sym_map);
         size_t cum[6] = {0,0,0,0,0,0};
         blk.read_cumulative(loc, cum);
         int target_code = this->symbol_to_code(symbol);
@@ -623,7 +621,7 @@ namespace panindexer {
         auto iter = this->blocks_start_pos.predecessor(pos);
         gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[iter->first]);
         size_t end_pos = (iter->first + 1 < this->blocks_encoded_start_bits.size()) ? this->blocks_encoded_start_bits[iter->first + 1] : this->blocks_encoded_stream.size();
-        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->encoded_has_N ? 6 : 5, &this->sym_map);
         size_t rel = pos - iter->second;
         size_t counts6[6] = {0,0,0,0,0,0};
         blk.ranks_at(loc, end_pos, rel, counts6);
@@ -717,23 +715,43 @@ namespace panindexer {
         size_t k = bint.forward;
         size_t k_prime = bint.reverse;
         int64_t s = bint.size;
-        int64_t b = 0;
+        size_t b = 0;
 
-
+        // std::cerr << "[backward_extend_encoded] k=" << k << " k'=" << k_prime << " s=" << s << std::endl;
         auto rank_cache_ks = rank_at_cached_encoded(k + s);
         auto rank_cache_k = rank_at_cached_encoded(k);
 
-        while (nuc[b] < this->complement(a)) {
-            // std::cerr << "nuc[b]=" << nuc[b] << std::endl;
-            k_prime += (rank_cache_ks[this->sym_map[this->complement(nuc[b])]] - rank_cache_k[this->sym_map[this->complement(nuc[b])]]);
+        // Advance over all symbols strictly smaller than complement(a) in sym_map order,
+        // guarding against running past the nuc alphabet size.
+        const size_t comp_sym = this->complement(a);
+        const size_t comp_idx = this->sym_map[comp_sym];
+        // std::cerr << "[backward_extend_encoded] a='" << (char)a << "' (" << (size_t)a
+        //           << ") comp='" << (char)comp_sym << "' (" << comp_sym << ")"
+        //           << " k=" << k << " k'=" << k_prime << " s=" << s
+        //           << " C.size()=" << this->C.size() << " comp_idx=" << comp_idx
+        //           << " sym_map[a]=" << (size_t)this->sym_map[a]
+        //           << std::endl;
+        while (b < nuc.size() && this->sym_map[(size_t)nuc[b]] < comp_idx) {
+            const size_t nuc_sym = static_cast<size_t>(nuc[b]);
+            const size_t nuc_comp = this->complement(nuc_sym);
+            const size_t idx = this->sym_map[nuc_comp];
+            const long long delta = static_cast<long long>(rank_cache_ks[idx]) - static_cast<long long>(rank_cache_k[idx]);
+            // std::cerr << "  [loop] b=" << b
+            //           << " nuc='" << (char)nuc_sym << "' (" << nuc_sym << ")"
+            //           << " sym_idx=" << (size_t)this->sym_map[nuc_sym]
+            //           << " comp_sym='" << (char)nuc_comp << "' idx=" << idx
+            //           << " add=" << delta << " k'=" << k_prime << std::endl;
+            k_prime += delta;
             b++;
         }
 
         auto rank_ks = rank_cache_ks[this->sym_map[a]];
         auto rank_k = rank_cache_k[this->sym_map[a]];
+        // std::cerr << "[backward_extend_encoded] ranks: rank_k=" << rank_k << " rank_ks=" << rank_ks << std::endl;
         if (rank_k >= rank_ks) { return bi_interval(0, 0, 0); }
         s = rank_ks - rank_k;
         k = rank_k + this->C[this->sym_map[a]];
+        // std::cerr << "[backward_extend_encoded] out: k=" << k << " k'=" << k_prime << " s=" << s << std::endl;
         return bi_interval(k, k_prime, s);
     }
 
@@ -1180,7 +1198,7 @@ namespace panindexer {
         }
         // Encoded
         gbwt::size_type loc = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
-        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, 6, &this->sym_map);
         blk.skip_header(loc);
         size_t cur = 0; size_t runnum = 0;
         while (true) {
@@ -1203,7 +1221,7 @@ namespace panindexer {
         size_t block_id = this->blocks_encoded_start_bits.size() - 1;
         gbwt::size_type loc2 = static_cast<gbwt::size_type>(this->blocks_encoded_start_bits[block_id]);
         size_t end_pos2 = this->blocks_encoded_stream.size();
-        EncodedBlock blk2(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+        EncodedBlock blk2(this->blocks_encoded_stream, this->encoded_has_N, 6, &this->sym_map);
         blk2.skip_header(loc2);
         size_t last_len = 0;
         while (static_cast<size_t>(loc2) < end_pos2 && (block_id + 1 >= this->blocks_encoded_start_bits.size() || static_cast<size_t>(loc2) < this->blocks_encoded_start_bits[block_id + 1])) {
@@ -1291,12 +1309,12 @@ namespace panindexer {
             auto iter = this->blocks_start_pos.predecessor(state.first);
             size_t block_id = iter->first; size_t block_start = iter->second;
             std::uint64_t bitloc = this->blocks_encoded_start_bits[block_id];
-            EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, this->C.size(), &this->sym_map);
+            EncodedBlock blk(this->blocks_encoded_stream, this->encoded_has_N, 6, &this->sym_map);
             blk.skip_header(bitloc);
             size_t cur = 0; size_t runnum = 0;
             while (true) {
-                gbwt::byte_type header = this->blocks_encoded_stream[bitloc / 8];
-                bitloc += 8;
+                gbwt::byte_type header = this->blocks_encoded_stream[bitloc];
+                bitloc += 1;
                 int code = (header >> 5) & 0x7;
                 size_t prefix = header & 0x1F;
                 size_t run_length = (prefix < 31 ? (prefix + 1) : (32 + static_cast<size_t>(gbwt::ByteCode::read(this->blocks_encoded_stream, bitloc))));
@@ -1378,16 +1396,18 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
     size_t k = bint.forward;
     size_t k_prime = bint.reverse;
     int64_t s = bint.size;
-    int64_t b = 0;
+    size_t b = 0;
 
     auto rank_cache_ks = rank_at_cached(k + s);
     auto rank_cache_k = rank_at_cached(k);
 
-    while (nuc[b] < this->complement(a)) {
-
+    // Advance over all symbols strictly smaller than complement(a) in sym_map order,
+    // guarding against running past the nuc alphabet size.
+    const size_t comp_sym = this->complement(a);
+    const size_t comp_idx = this->sym_map[comp_sym];
+    while (b < nuc.size() && this->sym_map[(size_t)nuc[b]] < comp_idx) {
         k_prime += (rank_cache_ks[this->sym_map[this->complement(nuc[b])]] - rank_cache_k[this->sym_map[this->complement(nuc[b])]]);
-
-//        k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
+        //        k_prime += (this->rankAt(k + s , this->complement(nuc[b])) - this->rankAt(k, this->complement(nuc[b])));
         b++;
     }
 

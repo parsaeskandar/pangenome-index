@@ -142,13 +142,29 @@ int main(int argc, char** argv){
             // Runs: until end of block
             size_t run_idx = 0;
             while (static_cast<size_t>(idx) < end) {
-                gbwt::byte_type header = stream[idx++];
+                gbwt::byte_type header = stream[idx];
+                idx++;
                 int code = (header >> 5) & 0x7;
                 size_t prefix = header & 0x1F;
                 size_t run_length = 0;
-                if (prefix < 31) { run_length = prefix + 1; }
-                else { size_t extra = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx)); run_length = 32 + extra; }
-                cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << "\n";
+                if (prefix < 31) { 
+                    run_length = prefix + 1; 
+                    cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header) << "]\n";
+                }
+                else { 
+                    // Record start position, read varint, then compute consumed bytes from index delta
+                    gbwt::size_type idx_before = idx;
+                    size_t extra = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx)); 
+                    run_length = 32 + extra; 
+                    cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header);
+                    // Print the extra bytes used for the extended length
+                    size_t extra_start = static_cast<size_t>(idx_before);
+                    for (size_t i = extra_start; i < static_cast<size_t>(idx); i++) {
+                        cout << " " << std::bitset<8>(stream[i]);
+                    }
+                    cout << "]\n";
+                }
+                
             }
         }
         cout << "\n";

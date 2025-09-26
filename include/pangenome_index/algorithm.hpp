@@ -660,7 +660,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         // Step 1: initial interval from P[x + min_len - 1]
         FastLocate::bi_interval bint = {0, 0, fmd_index.bwt_size()};
         // bint = fmd_index.backward_extend(bint, pattern[x + min_len - 1]);
-//         std::cerr << "here" << std::endl;
+        // std::cerr << "here" << std::endl;
         // std::cerr << "[find_mems] pattern='" << pattern << "' min_len=" << min_len
         //           << " min_occ=" << min_occ << " x=" << x << std::endl;
         for (j = x + min_len - 1; (int64_t)j >= (int64_t)x; --j) {
@@ -674,7 +674,7 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
             }
             if (j == 0) break;
         }
-//         std::cerr << "here2" << std::endl;
+        // std::cerr << "here2" << std::endl;
         // if (i >= x) return i + 1;
         // std::cerr << "here21234" << std::endl;
         // Step 2: forward extension from P[x + min_len]
@@ -718,13 +718,19 @@ size_t search(FastLocate& fmd_index, const std::string& Q, size_t len) {
         FastLocate::bi_interval back = {0, 0, fmd_index.bwt_size()};
         // back = fmd_index.backward_extend(back, pattern[j]);
 
-        
+        // std::cerr << "pattern" << std::endl;
         for (j = e ; j > x; --j) {
             back = fmd_index.backward_extend_encoded(back, pattern[j]);
+            // std::cerr << "j " << j << std::endl;
+        
             // std::cerr << "  [step3] j=" << j << " c='" << pattern[j] << "' -> (k=" << back.forward
             //           << ", l=" << back.reverse << ", s=" << back.size << ")" << std::endl;
-            if (back.size < min_occ || back.size <= 0) return j+1;
+            if (back.size < min_occ || back.size <= 0){
+                // std::cerr << "x " << x << " j " << j << " back.size " << back.size << " min_occ " << min_occ << std::endl;
+                return j+1;
+            } 
         }
+        // std::cerr << "here5" << std::endl;
 
         return j + 1;
     }
