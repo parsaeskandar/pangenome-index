@@ -88,18 +88,8 @@ int main(int argc, char **argv) {
         std::string &read = reads[i];
         gbwt::range_type range;
         if (r_index.is_encoded()) {
-            range = {0, r_index.bwt_size() - 1};
             std::cerr << "[encoded count] read_index=" << i << " len=" << read.size() << std::endl;
-            for (size_t pos = read.size(); pos > 0; --pos) {
-                char c = read[pos - 1];
-                gbwt::range_type prev = range;
-                range = r_index.count_encoded(read);
-                // range = r_index.LF_encoded(range, static_cast<size_t>(c));
-                // std::cerr << "  step=" << (read.size() - pos + 1)
-                //           << " char='" << c << "' prev=[" << prev.first << "," << prev.second
-                //           << "] new=[" << range.first << "," << range.second << "]" << std::endl;
-                if (range.first > range.second) break;
-            }
+            range = r_index.count_encoded(read);
             std::cerr << "  final range=[" << range.first << "," << range.second << "]\n";
         } else {
             range = r_index.count(read);
