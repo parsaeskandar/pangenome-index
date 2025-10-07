@@ -115,61 +115,61 @@ int main(int argc, char** argv){
     print_human_size("TOTAL r-index (approx)", bytes_rindex_total, r_runs);
     cout << "\n";
 
-    // Decode compact blocks: cumulative ranks (skip N if globally absent) followed by runs
-    cout << "=== Encoded blocks (header + runs) ===\n";
-    if (r_index.blocks_encoded_start_bits.size() == 0) {
-        cout << "No encoded blocks present.\n\n";
-    } else {
-        size_t num_blocks = r_index.blocks_encoded_start_bits.size();
-        const auto& stream = r_index.blocks_encoded_stream;
-        for (size_t b = 0; b < num_blocks; b++) {
-            size_t start = r_index.blocks_encoded_start_bits[b];
-            size_t end   = (b + 1 < num_blocks ? r_index.blocks_encoded_start_bits[b + 1] : stream.size());
-            gbwt::size_type idx = static_cast<gbwt::size_type>(start);
+    // // Decode compact blocks: cumulative ranks (skip N if globally absent) followed by runs
+    // cout << "=== Encoded blocks (header + runs) ===\n";
+    // if (r_index.blocks_encoded_start_bits.size() == 0) {
+    //     cout << "No encoded blocks present.\n\n";
+    // } else {
+    //     size_t num_blocks = r_index.blocks_encoded_start_bits.size();
+    //     const auto& stream = r_index.blocks_encoded_stream;
+    //     for (size_t b = 0; b < num_blocks; b++) {
+    //         size_t start = r_index.blocks_encoded_start_bits[b];
+    //         size_t end   = (b + 1 < num_blocks ? r_index.blocks_encoded_start_bits[b + 1] : stream.size());
+    //         gbwt::size_type idx = static_cast<gbwt::size_type>(start);
 
-            // Cumulative ranks in nuc order; skip N if globally absent
-            std::vector<size_t> cum_nuc(6, 0);
-            for (size_t i = 0; i < 6; i++) {
-                bool present = (i != 4) || r_index.encoded_has_N;
-                if (present) {
-                    cum_nuc[i] = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx));
-                }
-            }
-            cout << "Block " << b << " header: hasN=" << (r_index.encoded_has_N ? 1 : 0) << " cum=[";
-            for (size_t i = 0; i < cum_nuc.size(); i++) { if (i) cout << ","; cout << cum_nuc[i]; }
-            cout << "]\n";
+    //         // Cumulative ranks in nuc order; skip N if globally absent
+    //         std::vector<size_t> cum_nuc(6, 0);
+    //         for (size_t i = 0; i < 6; i++) {
+    //             bool present = (i != 4) || r_index.encoded_has_N;
+    //             if (present) {
+    //                 cum_nuc[i] = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx));
+    //             }
+    //         }
+    //         cout << "Block " << b << " header: hasN=" << (r_index.encoded_has_N ? 1 : 0) << " cum=[";
+    //         for (size_t i = 0; i < cum_nuc.size(); i++) { if (i) cout << ","; cout << cum_nuc[i]; }
+    //         cout << "]\n";
 
-            // Runs: until end of block
-            size_t run_idx = 0;
-            while (static_cast<size_t>(idx) < end) {
-                gbwt::byte_type header = stream[idx];
-                idx++;
-                int code = (header >> 5) & 0x7;
-                size_t prefix = header & 0x1F;
-                size_t run_length = 0;
-                if (prefix < 31) { 
-                    run_length = prefix + 1; 
-                    cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header) << "]\n";
-                }
-                else { 
-                    // Record start position, read varint, then compute consumed bytes from index delta
-                    gbwt::size_type idx_before = idx;
-                    size_t extra = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx)); 
-                    run_length = 32 + extra; 
-                    cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header);
-                    // Print the extra bytes used for the extended length
-                    size_t extra_start = static_cast<size_t>(idx_before);
-                    for (size_t i = extra_start; i < static_cast<size_t>(idx); i++) {
-                        cout << " " << std::bitset<8>(stream[i]);
-                    }
-                    cout << "]\n";
-                }
+    //         // Runs: until end of block
+    //         size_t run_idx = 0;
+    //         while (static_cast<size_t>(idx) < end) {
+    //             gbwt::byte_type header = stream[idx];
+    //             idx++;
+    //             int code = (header >> 5) & 0x7;
+    //             size_t prefix = header & 0x1F;
+    //             size_t run_length = 0;
+    //             if (prefix < 31) { 
+    //                 run_length = prefix + 1; 
+    //                 cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header) << "]\n";
+    //             }
+    //             else { 
+    //                 // Record start position, read varint, then compute consumed bytes from index delta
+    //                 gbwt::size_type idx_before = idx;
+    //                 size_t extra = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx)); 
+    //                 run_length = 32 + extra; 
+    //                 cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header);
+    //                 // Print the extra bytes used for the extended length
+    //                 size_t extra_start = static_cast<size_t>(idx_before);
+    //                 for (size_t i = extra_start; i < static_cast<size_t>(idx); i++) {
+    //                     cout << " " << std::bitset<8>(stream[i]);
+    //                 }
+    //                 cout << "]\n";
+    //             }
                 
-            }
-        }
-        cout << "\n";
-    }
-    cout << "\n";
+    //         }
+    //     }
+    //     cout << "\n";
+    // }
+    // cout << "\n";
 
     // Tag arrays components (compressed)
     cout << "=== Tag arrays (compressed) components ===\n";
