@@ -23,11 +23,12 @@ int main(int argc, char **argv) {
     double total_tag_time = 0.0;
 #endif
 
-    cerr << "Reading the rindex file" << endl;
+    cerr << "Reading the rindex file (encoded)" << endl;
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) { std::cerr << "Cannot open r-index: " << r_index_file << std::endl; std::exit(EXIT_FAILURE); }
+        r_index.load_encoded(rin);
     }
 
 
@@ -74,8 +75,8 @@ int main(int argc, char **argv) {
 
     cerr << "Reading the tag array index" << endl;
     TagArray tag_array;
-    std::ifstream in_ds(tag_array_index);
-    tag_array.load_compressed_tags(in_ds);
+    std::ifstream in_ds(tag_array_index, std::ios::binary);
+    tag_array.load_compressed_tags_compact(in_ds);
 
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
@@ -124,8 +125,8 @@ int main(int argc, char **argv) {
 #endif
 
 
-            // Query the tag array for this MEM
-             tag_array.query_compressed(mem.bwt_start, mem.bwt_start + mem.size - 1, tag_nums);
+            // Query the tag array for this MEM (compact)
+            tag_array.query_compressed_compact(mem.bwt_start, mem.bwt_start + mem.size - 1, tag_nums);
 
 #if TIME
             auto time7 = chrono::high_resolution_clock::now();

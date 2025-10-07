@@ -103,12 +103,12 @@ int main(int argc, char** argv) {
         auto decoded = TagArray::decode_run(decc);
         batch.emplace_back(decoded.first, decoded.second);
         if (batch.size() >= batch_runs) {
-            tag_array.compressed_serialize(main_out, encoded_starts_out, bwt_intervals_out, batch);
+            tag_array.compressed_serialize_compact(main_out, encoded_starts_out, bwt_intervals_out, batch);
             batch.clear();
         }
     }
     if (!batch.empty()) {
-        tag_array.compressed_serialize(main_out, encoded_starts_out, bwt_intervals_out, batch);
+        tag_array.compressed_serialize_compact(main_out, encoded_starts_out, bwt_intervals_out, batch);
         batch.clear();
     }
 

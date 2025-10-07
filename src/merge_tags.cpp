@@ -334,13 +334,8 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
 
     if (index == last_run_index){
 
-        std::cerr << "hit last run in block " << r_index.blocks.size() << std::endl;
-        // what is the last run size
-        auto last_block = r_index.blocks[r_index.blocks.size() - 1];
-        if (last_block.runs.empty()){
-            std::cerr << "last block is empty " << std::endl;
-        } else {
-            int last_run_size = r_index.blocks.back().last_run_size();
+        std::cerr << "hit last run" << std::endl;
+        int last_run_size = r_index.last_run_size_global();
 
 
             // have to just traverse the last run
@@ -362,7 +357,7 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
         }
 
 
-    }
+    // (continue inside function)
 
     // we have the tags we want to extract from each file. now we extract the tags for each index
     std::vector<std::vector<std::pair<pos_t, uint16_t>>> run_tags = reader.extract_requested_tags(thread_id, request);
@@ -466,11 +461,15 @@ int main(int argc, char **argv) {
     }
 
 
-    cerr << "Reading the whole genome r-index file" << endl;
+    cerr << "Reading the whole genome r-index file (encoded)" << endl;
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) {
+            std::cerr << "Cannot open r-index: " << r_index_file << std::endl;
+            std::exit(EXIT_FAILURE);
+        }
+        r_index.load_encoded(rin);
     }
 
 
@@ -537,6 +536,7 @@ int main(int argc, char **argv) {
 
 
     const std::string filename = "whole_genome_tag_array_compressed.tags";
+    const std::string encoded_runs_path = filename + ".encoded_runs.tmp";
     const std::string encoded_starts_file = "encoded_starts.bin";
     const std::string bwt_intervals_file = "bwt_intervals.bin";
 
@@ -583,9 +583,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // write a size_t dummy to fill with the size of the encoded_runs later
-    size_t placeholder = 0;
-    out.write(reinterpret_cast<const char*>(&placeholder), sizeof(size_t));
+    // encoded_runs will be written as sdsl int_vector; no size header needed.
 
 
     std::ofstream out_bwt_intervals(bwt_intervals_file, std::ios::binary | std::ios::app);
@@ -629,16 +627,22 @@ int main(int argc, char **argv) {
 
 
 
+    // Determine maximum node id to compute width for encoded runs
+    nid_t max_node_id = 0;
+    auto weak_components = gbwtgraph::weakly_connected_components(gbz.graph);
+    for (const auto& comp : weak_components) {
+        for (nid_t nid : comp) { if (nid > max_node_id) max_node_id = nid; }
+    }
+    size_t node_bits = sdsl::bits::hi(max_node_id) + 1;
+    size_t width_bits = 10 + 1 + node_bits;
+    tag_array.begin_encoded_runs_sdsl(encoded_runs_path, width_bits);
+
     // Now have to find the run and index of the first index that is not an ENDMARKER
     // having to find the run and index of the BWT position num_endmarkers
     // iter.first is the block number num_endmarkers is in
     // iter.second is the offset of the beginning of the block
-    auto iter = r_index.blocks_start_pos.predecessor(num_endmarkers);
-
-    size_t cur_pos = 0;
-    auto run_num = r_index.blocks[iter->first].run_id_at(num_endmarkers - iter->second, cur_pos);
-    auto run_id = iter->first * r_index.block_size + run_num; // this is the run that the num_endmarkers end in
-    auto offset_of_first = iter->second + cur_pos;
+    size_t run_id = 0; size_t offset_of_first = 0;
+    r_index.run_id_and_offset_at(num_endmarkers, run_id, offset_of_first);
 
     // we want a job handling the remaining of the run_id run
     auto first = r_index.getSample(run_id);
@@ -689,7 +693,9 @@ int main(int argc, char **argv) {
     // TODO: handle the case in compressed version - also the last element might be needed for merging later
 
 
-    tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp_tag_runs);
+    for (auto &p : temp_tag_runs) {
+        tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+    }
 //    std::vector<gbwt::byte_type> temp_encoded_runs;
 //    if (temp_tag_runs.size() > 0) {
 //        for (const auto& [value, run_length] : temp_tag_runs) {
@@ -777,7 +783,9 @@ int main(int argc, char **argv) {
             current_tags[0].second += previous_last_run.second;
         } else {
             std::vector<std::pair<pos_t, uint16_t>> temp = {previous_last_run};
-            tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, temp);
+            for (auto &p : temp) {
+                tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+            }
 
 //            std::cerr << "Handling the previous last run" << std::endl;
 
@@ -809,7 +817,9 @@ int main(int argc, char **argv) {
 
 
         tag_run_count += current_tags.size();
-        tag_array.compressed_serialize(out, out_encoded_starts, out_bwt_intervals, current_tags);
+        for (auto &p : current_tags) {
+            tag_array.append_compact_run_streamed(p.first, p.second, out_encoded_starts, out_bwt_intervals);
+        }
 
 
     }
@@ -820,6 +830,16 @@ int main(int argc, char **argv) {
     }
 
 
+    // Finish encoded runs iv and serialize it to the main index file
+    tag_array.end_encoded_runs_sdsl();
+    {
+        std::ifstream iv_in(encoded_runs_path, std::ios::binary);
+        tag_array.load_encoded_runs_sdsl(iv_in);
+        tag_array.serialize_encoded_runs_sdsl(out);
+        iv_in.close();
+        std::remove(encoded_runs_path.c_str());
+    }
+
     out_encoded_starts.close();
     out_bwt_intervals.close();
     out.close();
@@ -828,7 +848,7 @@ int main(int argc, char **argv) {
     std::cerr << "Total length of encoded runs " << start_pos + 1 << std::endl;
     std::cerr << "Saving the start of runs every " << encoded_start_every_k_run << " which lead to " << encoded_start_ones << " 1s in the start sd_vector" << std::endl;
 
-    tag_array.merge_compressed_files(filename, encoded_starts_file, bwt_intervals_file);
+    tag_array.merge_compressed_files_sdsl(filename, encoded_starts_file, bwt_intervals_file);
     std::cerr << "Index files merged and ready to use!" << std::endl;
 
 

@@ -7,6 +7,7 @@
 #include "pangenome_index/r-index.hpp"
 #include "pangenome_index/tag_arrays.hpp"
 #include <sdsl/util.hpp>
+#include <gbwt/utils.h>
 
 using namespace std;
 using namespace panindexer;
@@ -34,11 +35,12 @@ int main(int argc, char** argv){
     const string ri_path = argv[1];
     const string tags_path = argv[2];
 
-    // Load r-index
+    // Load r-index (supports encoded or legacy formats)
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, ri_path)){
-        cerr << "Error: cannot load r-index from " << ri_path << "\n";
-        return 1;
+    {
+        ifstream rin(ri_path, ios::binary);
+        if (!rin){ cerr << "Error: cannot open r-index: " << ri_path << "\n"; return 1; }
+        r_index.load_encoded(rin);
     }
 
     // Load compressed tags
@@ -48,7 +50,8 @@ int main(int argc, char** argv){
         cerr << "Error: cannot open tags file: " << tags_path << "\n";
         return 1;
     }
-    tag_array.load_compressed_tags(tin);
+    // The tags are written in the SDSL int_vector format by merge_tags; load via sdsl loader
+    tag_array.load_compressed_tags_sdsl(tin);
     tin.close();
 
     // High-level summary
@@ -74,11 +77,20 @@ int main(int argc, char** argv){
 
     size_t bytes_blocks_char = 0;
     size_t bytes_blocks_runs = 0;
-    for (const auto& blk : r_index.blocks){
-        bytes_blocks_char += sdsl::size_in_bytes(blk.get_cum_ranks());
-        bytes_blocks_runs += blk.get_run_nums() * sizeof(std::pair<size_t,size_t>);
+    size_t bytes_blocks_total = 0;
+    size_t bytes_blocks_encoded_starts = 0;
+    size_t bytes_blocks_encoded_stream = 0;
+    if (!r_index.blocks.empty()){
+        for (const auto& blk : r_index.blocks){
+            bytes_blocks_char += sdsl::size_in_bytes(blk.get_cum_ranks());
+            bytes_blocks_runs += blk.get_run_nums() * sizeof(std::pair<size_t,size_t>);
+        }
+        bytes_blocks_total = bytes_blocks_char + bytes_blocks_runs;
+    } else {
+        bytes_blocks_encoded_starts = sdsl::size_in_bytes(r_index.blocks_encoded_start_bits);
+        bytes_blocks_encoded_stream = r_index.blocks_encoded_stream.size();
+        bytes_blocks_total = bytes_blocks_encoded_starts + bytes_blocks_encoded_stream;
     }
-    size_t bytes_blocks_total = bytes_blocks_char + bytes_blocks_runs;
 
     size_t bytes_misc = sizeof(r_index.sequence_size) + sizeof(r_index.block_size) + sizeof(r_index.complement_table);
 
@@ -92,11 +104,72 @@ int main(int argc, char** argv){
     print_human_size("sym_map", bytes_sym_map, r_runs);
     print_human_size("C", bytes_C, r_runs);
     print_human_size("blocks_start_pos (sd_vector)", bytes_blocks_start_pos, r_runs);
-    print_human_size("blocks.character_cum_ranks", bytes_blocks_char, r_runs);
-    print_human_size("blocks.runs (pairs)", bytes_blocks_runs, r_runs);
+    if (!r_index.blocks.empty()){
+        print_human_size("blocks.character_cum_ranks", bytes_blocks_char, r_runs);
+        print_human_size("blocks.runs (pairs)", bytes_blocks_runs, r_runs);
+    } else {
+        print_human_size("blocks.encoded_start_bits (int_vector<0>)", bytes_blocks_encoded_starts, r_runs);
+        print_human_size("blocks.encoded_stream (bytes)", bytes_blocks_encoded_stream, r_runs);
+    }
     print_human_size("misc (seq_size, block_size, complement)", bytes_misc, r_runs);
     print_human_size("TOTAL r-index (approx)", bytes_rindex_total, r_runs);
     cout << "\n";
+
+    // // Decode compact blocks: cumulative ranks (skip N if globally absent) followed by runs
+    // cout << "=== Encoded blocks (header + runs) ===\n";
+    // if (r_index.blocks_encoded_start_bits.size() == 0) {
+    //     cout << "No encoded blocks present.\n\n";
+    // } else {
+    //     size_t num_blocks = r_index.blocks_encoded_start_bits.size();
+    //     const auto& stream = r_index.blocks_encoded_stream;
+    //     for (size_t b = 0; b < num_blocks; b++) {
+    //         size_t start = r_index.blocks_encoded_start_bits[b];
+    //         size_t end   = (b + 1 < num_blocks ? r_index.blocks_encoded_start_bits[b + 1] : stream.size());
+    //         gbwt::size_type idx = static_cast<gbwt::size_type>(start);
+
+    //         // Cumulative ranks in nuc order; skip N if globally absent
+    //         std::vector<size_t> cum_nuc(6, 0);
+    //         for (size_t i = 0; i < 6; i++) {
+    //             bool present = (i != 4) || r_index.encoded_has_N;
+    //             if (present) {
+    //                 cum_nuc[i] = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx));
+    //             }
+    //         }
+    //         cout << "Block " << b << " header: hasN=" << (r_index.encoded_has_N ? 1 : 0) << " cum=[";
+    //         for (size_t i = 0; i < cum_nuc.size(); i++) { if (i) cout << ","; cout << cum_nuc[i]; }
+    //         cout << "]\n";
+
+    //         // Runs: until end of block
+    //         size_t run_idx = 0;
+    //         while (static_cast<size_t>(idx) < end) {
+    //             gbwt::byte_type header = stream[idx];
+    //             idx++;
+    //             int code = (header >> 5) & 0x7;
+    //             size_t prefix = header & 0x1F;
+    //             size_t run_length = 0;
+    //             if (prefix < 31) { 
+    //                 run_length = prefix + 1; 
+    //                 cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header) << "]\n";
+    //             }
+    //             else { 
+    //                 // Record start position, read varint, then compute consumed bytes from index delta
+    //                 gbwt::size_type idx_before = idx;
+    //                 size_t extra = static_cast<size_t>(gbwt::ByteCode::read(const_cast<std::vector<gbwt::byte_type>&>(stream), idx)); 
+    //                 run_length = 32 + extra; 
+    //                 cout << "  run[" << run_idx++ << "]: code=" << code << " length=" << run_length << " bits=[" << std::bitset<8>(header);
+    //                 // Print the extra bytes used for the extended length
+    //                 size_t extra_start = static_cast<size_t>(idx_before);
+    //                 for (size_t i = extra_start; i < static_cast<size_t>(idx); i++) {
+    //                     cout << " " << std::bitset<8>(stream[i]);
+    //                 }
+    //                 cout << "]\n";
+    //             }
+                
+    //         }
+    //     }
+    //     cout << "\n";
+    // }
+    // cout << "\n";
 
     // Tag arrays components (compressed)
     cout << "=== Tag arrays (compressed) components ===\n";

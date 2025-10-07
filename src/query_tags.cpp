@@ -52,9 +52,10 @@ int main(int argc, char **argv) {
 #endif
 
     FastLocate r_index;
-    if (!sdsl::load_from_file(r_index, r_index_file)) {
-        std::cerr << "Cannot load the r-index from " << r_index_file << std::endl;
-        std::exit(EXIT_FAILURE);
+    {
+        std::ifstream rin(r_index_file, std::ios::binary);
+        if (!rin) { std::cerr << "Cannot open r-index: " << r_index_file << std::endl; return 1; }
+        r_index.load_encoded(rin);
     }
 
 #if TIME
@@ -67,7 +68,7 @@ int main(int argc, char **argv) {
     cerr << "Reading the tag array index" << endl;
     TagArray tag_array;
     std::ifstream in_ds(tag_array_index, std::ios::binary);
-    tag_array.load_compressed_tags(in_ds);
+    tag_array.load_compressed_tags_compact(in_ds);
 
 #if TIME
     auto time3 = chrono::high_resolution_clock::now();
@@ -85,13 +86,20 @@ int main(int argc, char **argv) {
     // For each read, query r-index and tag arrays, then output summary
     for (size_t i = 0; i < reads.size(); ++i) {
         std::string &read = reads[i];
-        auto range = r_index.count(read);
+        gbwt::range_type range;
+        if (r_index.is_encoded()) {
+            std::cerr << "[encoded count] read_index=" << i << " len=" << read.size() << std::endl;
+            range = r_index.count_encoded(read);
+            std::cerr << "  final range=[" << range.first << "," << range.second << "]\n";
+        } else {
+            range = r_index.count(read);
+        }
         size_t number_of_runs = 0;
         if (range.first > range.second) {
             std::cerr << "Read " << i << " has no matches" << std::endl;
             continue;
         }
-        tag_array.query_compressed(range.first, range.second, number_of_runs);
+        tag_array.query_compressed_compact(range.first, range.second, number_of_runs);
         std::cout << "read_index=" << i
                   << "\tlen=" << read.size()
                   << "\tbwt_start=" << range.first

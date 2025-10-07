@@ -49,16 +49,30 @@ namespace panindexer {
         void store_blocks_sdsl(std::string filename);
 
         static std::pair<pos_t, uint16_t> decode_run(gbwt::size_type decc);
+        static pos_t decode_run_length_compact(gbwt::size_type encoded);
         gbwt::size_type encode_run_length(size_t offset, bool is_rev, uint16_t length, int64_t node_id);
+        gbwt::size_type encode_run_length_compact(size_t offset, bool is_rev, uint16_t length, int64_t node_id);
 
         vector<pair<pos_t, uint16_t>> get_tag_runs(){
             return tag_runs;
         };
 
         void compressed_serialize(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs);
+        // Compact variant: encodes only position fields in encoded_runs; lengths are implied by bwt_intervals
+        void compressed_serialize_compact(std::ostream &main_out, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file, std::vector<std::pair<pos_t, uint16_t>> &tag_runs);
         void merge_compressed_files(const std::string filename, const std::string encoded_starts_file, const std::string bwt_intervals_file);
         void load_compressed_tags(std::istream &in);
+        // sdsl int_vector format loader
+        void load_compressed_tags_sdsl(std::istream &in);
+        // Alias to sdsl loader for compact mode
+        inline void load_compressed_tags_compact(std::istream &in) { load_compressed_tags_sdsl(in); }
         void query_compressed(size_t start, size_t end, size_t &number_of_runs);
+        // Compact variant: decodes positions using decode_run_length_compact
+        void query_compressed_compact(size_t start, size_t end, size_t &number_of_runs);
+        // Streaming append helper for compact runs (writes sidecar sdsl structures and appends to encoded int_vector buffer)
+        void append_compact_run_streamed(pos_t value, uint16_t run_length, std::ostream &encoded_starts_file, std::ostream &bwt_intervals_file);
+        // Merge sidecar files with main file (sdsl layout: [int_vector][encoded_starts_sd][bwt_intervals])
+        void merge_compressed_files_sdsl(const std::string filename, const std::string encoded_starts_file, const std::string bwt_intervals_file);
 
         // Statistics helpers for compressed format
         size_t number_of_runs_compressed() const;
@@ -67,10 +81,20 @@ namespace panindexer {
         size_t bytes_bwt_intervals() const;
         size_t bytes_total_compressed() const;
 
+        // New sdsl int_vector<0> streaming API
+        void begin_encoded_runs_sdsl(const std::string& path, size_t width_bits);
+        void append_encoded_run_sdsl(gbwt::size_type encoded_value);
+        void end_encoded_runs_sdsl();
+        void load_encoded_runs_sdsl(std::istream& in);
+        void serialize_encoded_runs_sdsl(std::ostream& out) const;
+
     private:
 
         //
         std::vector<gbwt::byte_type> encoded_runs;
+        sdsl::int_vector<0> encoded_runs_iv; // Loaded variant
+        std::unique_ptr<sdsl::int_vector_buffer<0>> encoded_runs_ivb; // Streaming writer
+        size_t encoded_runs_items_written = 0; // items appended in current streaming session
 
 
         sdsl::bit_vector encoded_runs_starts;
