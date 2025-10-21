@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include "bplus_tree.hpp"
 #include <gbwtgraph/utils.h>
+#include <functional>
 //#include <vg/io/vpkg.hpp>
 
 
@@ -87,6 +88,13 @@ namespace panindexer {
         void end_encoded_runs_sdsl();
         void load_encoded_runs_sdsl(std::istream& in);
         void serialize_encoded_runs_sdsl(std::ostream& out) const;
+
+        // Iterate over all runs in compact (int_vector) format, yielding (pos_t, run_length)
+        // Requires that load_compressed_tags_compact() has been used to populate encoded_runs_iv and bwt_intervals.
+        void for_each_run_compact(const std::function<void(pos_t, uint64_t)>& fn) const;
+
+        // Returns the logical BWT size used for building bwt_intervals (sd_vector size)
+        inline size_t bwt_size() const { return this->bwt_intervals.size(); }
 
     private:
 

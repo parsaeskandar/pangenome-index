@@ -974,6 +974,35 @@ namespace panindexer {
     }
 
 
+    // Iterate over all compact runs: use bwt_intervals rank to get run count, then scan encoded_runs_iv
+    void TagArray::for_each_run_compact(const std::function<void(pos_t, uint64_t)>& fn) const {
+        if (this->encoded_runs_iv.empty()) {
+            throw std::runtime_error("encoded_runs_iv is empty; load compact tags first");
+        }
+        // Build rank over bwt_intervals locally (const method; member type already constructed in loaders)
+        sdsl::sd_vector<>::rank_1_type rank_tmp(&this->bwt_intervals);
+        size_t run_count = rank_tmp(this->bwt_intervals.size());
+        if (run_count == 0) return;
+
+        // We need lengths. In compact mode, lengths are implicit: distance between consecutive 1s in bwt_intervals.
+        // We'll iterate 1-positions using select. Build select locally to avoid reliance on mutable members.
+        sdsl::sd_vector<>::select_1_type select_tmp(&this->bwt_intervals);
+
+        // Iterate encoded_runs_iv items in order; each corresponds to a run start with a length defined by BWT interval width.
+        // The item count should equal run_count.
+        size_t item_index = 0;
+        for (size_t r = 1; r <= run_count; ++r) {
+            gbwt::size_type enc_val = this->encoded_runs_iv[item_index++];
+            pos_t decoded_pos = decode_run_length_compact(enc_val);
+            size_t start_pos = select_tmp(r);
+            size_t end_pos = (r == run_count) ? this->bwt_intervals.size() : select_tmp(r + 1);
+            uint64_t run_len = end_pos - start_pos; // length in BWT positions
+            std::cerr << "Decoded position: " << decoded_pos << " Run length: " << run_len << std::endl;
+            fn(decoded_pos, run_len);
+        }
+    }
+
+
 
 }
 
