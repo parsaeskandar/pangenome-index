@@ -5,7 +5,9 @@
 
 #include "../include/pangenome_index/r-index.hpp"
 #include <gbwt/utils.h>
+#include <cassert>
 #include <cstdlib>
+#include <new>
 
 
 //TODO: MAKE THE copy, swap, ... function with the new variables
@@ -212,6 +214,9 @@ namespace panindexer {
 
     FastLocate::FastLocate(const FastLocate &source) {
         this->copy(source);
+        // Keep copy-constructor path explicitly eager: supports are rebound now,
+        // not deferred to lazy initialization.
+        this->reset_supports();
     }
 
     FastLocate::FastLocate(FastLocate &&source) {
@@ -219,6 +224,20 @@ namespace panindexer {
     }
 
     FastLocate::~FastLocate() {
+    }
+
+    void
+    FastLocate::reset_supports() {
+        // once_flag is not assignable; placement-new resets to "not called yet".
+        new (&this->last_rank_once) std::once_flag();
+        new (&this->last_select_once) std::once_flag();
+        new (&this->blocks_start_select_once) std::once_flag();
+
+        // Rebind supports to current sd_vector storage to avoid dangling pointers
+        // after copy/move/swap of underlying containers.
+        sdsl::util::init_support(this->last_rank_support, &this->last);
+        sdsl::util::init_support(this->last_select_support, &this->last);
+        sdsl::util::init_support(this->blocks_start_select_support, &this->blocks_start_pos);
     }
 
     void
@@ -234,10 +253,13 @@ namespace panindexer {
             this->blocks.swap(another.blocks);
             this->blocks_start_pos.swap(another.blocks_start_pos);
             std::swap(this->sequence_size, another.sequence_size);
+            std::swap(this->n_runs, another.n_runs);
             this->blocks_encoded_start_bits.swap(another.blocks_encoded_start_bits);
             this->blocks_encoded_stream.swap(another.blocks_encoded_stream);
             std::swap(this->encoded_block_size, another.encoded_block_size);
             std::swap(this->encoded_has_N, another.encoded_has_N);
+            this->reset_supports();
+            another.reset_supports();
         }
     }
 
@@ -259,11 +281,14 @@ namespace panindexer {
             this->C = std::move(source.C);
             this->blocks_start_pos = std::move(source.blocks_start_pos);
             this->sequence_size = source.sequence_size;
+            this->n_runs = source.n_runs;
             this->blocks = std::move(source.blocks);
             this->blocks_encoded_start_bits = std::move(source.blocks_encoded_start_bits);
             this->blocks_encoded_stream = std::move(source.blocks_encoded_stream);
             this->encoded_block_size = source.encoded_block_size;
             this->encoded_has_N = source.encoded_has_N;
+            this->reset_supports();
+            source.reset_supports();
         }
         return *this;
     }
@@ -388,6 +413,7 @@ namespace panindexer {
 
 
         this->samples.load(in);
+        this->n_runs = this->samples.size();
         this->last.load(in);
         this->last_to_run.load(in);
 
@@ -433,6 +459,7 @@ namespace panindexer {
         this->header.setVersion();
 
         this->samples.load(in);
+        this->n_runs = this->samples.size();
         this->last.load(in);
         this->last_to_run.load(in);
 
@@ -473,11 +500,13 @@ namespace panindexer {
         this->C = source.C;
         this->blocks_start_pos = source.blocks_start_pos;
         this->sequence_size = source.sequence_size;
+        this->n_runs = source.n_runs;
         this->blocks = source.blocks;
         this->blocks_encoded_start_bits = source.blocks_encoded_start_bits;
         this->blocks_encoded_stream = source.blocks_encoded_stream;
         this->encoded_block_size = source.encoded_block_size;
         this->encoded_has_N = source.encoded_has_N;
+        this->reset_supports();
     }
 
 //------------------------------------------------------------------------------
@@ -795,13 +824,9 @@ namespace panindexer {
 
     // This function returns the exact number of runs, considering that each NENDMARKER is a separate run
     size_type FastLocate::total_runs() {
-        size_t runs = 0;
-        for (size_t i = 0; i < this->buff_reader->size(); i++) {
-            size_t sym, freq;
-            this->buff_reader->read_run(i, sym, freq);
-            runs += (sym == NENDMARKER ? freq : 1);
-        }
-        return runs;
+        // total_runs() must be post-construction/query-safe and independent of buff_reader cursor state.
+        assert(this->buff_reader == nullptr && "FastLocate::total_runs() should not read from buff_reader at query time");
+        return this->n_runs;
     }
 
     FastLocate::FastLocate(std::string source) :
@@ -819,11 +844,19 @@ namespace panindexer {
             if (Verbosity::level >= Verbosity::FULL) {
                 std::cerr << "FastLocate::FastLocate(): The input grlBWT is empty" << std::endl;
             }
+            delete this->buff_reader;
+            this->buff_reader = nullptr;
             return;
         }
 
         // Determine the number of logical runs before each record.
-        size_type total_runs = this->total_runs();
+        this->n_runs = 0;
+        for (size_t i = 0; i < this->buff_reader->size(); i++) {
+            size_t sym, freq;
+            this->buff_reader->read_run(i, sym, freq);
+            this->n_runs += (sym == NENDMARKER ? freq : 1);
+        }
+        size_type total_runs = this->n_runs;
         auto n_seq = this->tot_strings();
 
         std::cerr << total_runs / this->block_size << std::endl;
@@ -1158,6 +1191,8 @@ namespace panindexer {
                       << this->get_sequence_size()
                       << " in " << seconds << " seconds" << std::endl;
         }
+        delete this->buff_reader;
+        this->buff_reader = nullptr;
 
     }
 

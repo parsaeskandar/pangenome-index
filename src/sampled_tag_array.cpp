@@ -12,6 +12,51 @@ namespace panindexer {
         return SampledTagArray::encode_value(gbwtgraph::id(p), gbwtgraph::is_rev(p));
     }
 
+    SampledTagArray::SampledTagArray() {
+        this->init_supports();
+    }
+
+    SampledTagArray::SampledTagArray(const SampledTagArray& source) :
+            sampled_values(source.sampled_values),
+            bwt_intervals(source.bwt_intervals),
+            first_run_is_gap(source.first_run_is_gap) {
+        this->init_supports();
+    }
+
+    SampledTagArray& SampledTagArray::operator=(const SampledTagArray& source) {
+        if (this != &source) {
+            this->sampled_values = source.sampled_values;
+            this->bwt_intervals = source.bwt_intervals;
+            this->first_run_is_gap = source.first_run_is_gap;
+            this->init_supports();
+        }
+        return *this;
+    }
+
+    SampledTagArray::SampledTagArray(SampledTagArray&& source) noexcept :
+            sampled_values(std::move(source.sampled_values)),
+            bwt_intervals(std::move(source.bwt_intervals)),
+            first_run_is_gap(source.first_run_is_gap) {
+        this->init_supports();
+        source.init_supports();
+    }
+
+    SampledTagArray& SampledTagArray::operator=(SampledTagArray&& source) noexcept {
+        if (this != &source) {
+            this->sampled_values = std::move(source.sampled_values);
+            this->bwt_intervals = std::move(source.bwt_intervals);
+            this->first_run_is_gap = source.first_run_is_gap;
+            this->init_supports();
+            source.init_supports();
+        }
+        return *this;
+    }
+
+    void SampledTagArray::init_supports() {
+        sdsl::util::init_support(run_rank_support, &bwt_intervals);
+        sdsl::util::init_support(run_select_support, &bwt_intervals);
+    }
+
     // Helper function to construct wt_gmr from values
     // wt_gmr uses grammar-based compression which is more memory-efficient and stable on macOS
     static void construct_wt_gmr_from_values(sdsl::wt_gmr<sdsl::int_vector<>, sdsl::inv_multi_perm_support<4, sdsl::int_vector<>>>& target, const std::vector<uint64_t>& values) {
@@ -97,6 +142,7 @@ namespace panindexer {
 
         // Build wt_gmr from only non-gap values
         construct_wt_gmr_from_values(sampled_values, non_gap_values);
+        this->init_supports();
     }
 
     void SampledTagArray::build_from_enumerator(const std::function<void(const std::function<void(pos_t,uint64_t)>&)>& enumerator,
@@ -164,14 +210,13 @@ namespace panindexer {
         std::cerr << "The size of the non_gap_values vector is: " << non_gap_values.size() << std::endl;
         // Build wt_gmr from only non-gap values
         construct_wt_gmr_from_values(sampled_values, non_gap_values);
+        this->init_supports();
         
         std::cerr << "Finished building sampled_tag_array" << std::endl;
     }
 
     void SampledTagArray::print_bwt_intervals_and_rank(size_t limit, std::ostream& out) const {
         // Same rank as run_id_at: rank_1(pos+1) = number of 1s in [0..pos]; run_id = rank - 1 (so run_id_at is correct).
-        ensure_run_rank();
-        ensure_run_select();
         size_t n = std::min(limit, static_cast<size_t>(bwt_intervals.size()));
         size_t nruns = total_runs();
         out << "is_first_run_gap=" << first_run_is_gap << "\n";
@@ -199,6 +244,7 @@ namespace panindexer {
         sampled_values.load(in);
         bwt_intervals.load(in);
         sdsl::read_member(first_run_is_gap, in);
+        this->init_supports();
     }
 
 }

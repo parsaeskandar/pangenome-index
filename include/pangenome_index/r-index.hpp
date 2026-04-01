@@ -320,7 +320,9 @@ namespace panindexer {
         sdsl::sd_vector<> blocks_start_pos;
 
         // store the size of the whole text
-        size_t sequence_size;
+        size_t sequence_size = 0;
+        // Cached number of logical runs (each NENDMARKER counts as its own run).
+        size_type n_runs = 0;
 
         // Encoded blocks storage
         // Start bit position of each block in the encoded bitstream
@@ -733,6 +735,9 @@ namespace panindexer {
         }
 
     private:
+        // Rebind lazy support structures and reset once_flags after data movement/swap.
+        void reset_supports();
+
         void copy(const FastLocate &source);
 
 

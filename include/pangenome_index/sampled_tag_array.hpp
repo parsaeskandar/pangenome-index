@@ -10,7 +10,6 @@
 #include <sdsl/int_vector.hpp>
 #include <sdsl/construct.hpp>
 #include <sdsl/util.hpp>
-#include <mutex>
 #include <ostream>
 #include <gbwtgraph/utils.h>
 
@@ -18,7 +17,11 @@ namespace panindexer {
 
     class SampledTagArray {
     public:
-        SampledTagArray() = default;
+        SampledTagArray();
+        SampledTagArray(const SampledTagArray& source);
+        SampledTagArray& operator=(const SampledTagArray& source);
+        SampledTagArray(SampledTagArray&& source) noexcept;
+        SampledTagArray& operator=(SampledTagArray&& source) noexcept;
 
         // Build from a stream of runs: for each input run (pos_t, length),
         // emit value = encode(node_id,is_rev) if offset==0, else GAP_CODE (0), merging consecutive runs with equal value.
@@ -37,27 +40,17 @@ namespace panindexer {
         inline const sdsl::sd_vector<>& run_starts() const { return bwt_intervals; }
         inline bool is_first_run_gap() const { return first_run_is_gap; }
 
+        // Compatibility no-ops: supports are eagerly initialized.
+        inline void ensure_run_rank() const {}
+        inline void ensure_run_select() const {}
+
         // Debug: print is_first_run_gap, then bwt_intervals bit and rank for positions [0, limit)
         void print_bwt_intervals_and_rank(size_t limit, std::ostream& out = std::cerr) const;
-
-        // Lazy support initialization for run_starts()
-        inline void ensure_run_rank() const {
-            std::call_once(run_rank_once, [&]() {
-                sdsl::util::init_support(run_rank_support, &bwt_intervals);
-            });
-        }
-
-        inline void ensure_run_select() const {
-            std::call_once(run_select_once, [&]() {
-                sdsl::util::init_support(run_select_support, &bwt_intervals);
-            });
-        }
 
         // Helpers for queries
         inline size_t total_runs() const { 
             // Total runs includes both gap and non-gap runs
             // bwt_intervals has one bit per run (including gaps)
-            ensure_run_rank();
             return run_rank_support(bwt_intervals.size());
         }
 
@@ -66,7 +59,6 @@ namespace panindexer {
         // SDSL rank_1(i) = number of 1s in [0..i-1], so rank_1(pos+1) = number of 1s in [0..pos].
         // So run_id = rank_1(pos+1) - 1 (0-based); when rank==0 we return 0 (pos before first run start).
         inline size_t run_id_at(size_t pos) const {
-            ensure_run_rank();
             if (pos >= bwt_intervals.size()) {
                 pos = bwt_intervals.size() - 1;
             }
@@ -76,7 +68,6 @@ namespace panindexer {
 
         // Return [start,end] BWT span for run_id
         inline std::pair<size_t,size_t> run_span(size_t run_id) const {
-            ensure_run_select();
             size_t start = run_select_support(run_id + 1);
             size_t end;
             if (run_id + 1 < total_runs()) {
@@ -108,15 +99,15 @@ namespace panindexer {
         }
 
     private:
+        void init_supports();
+
         sdsl::wt_gmr<sdsl::int_vector<>, sdsl::inv_multi_perm_support<4, sdsl::int_vector<>>> sampled_values; // only non-gap values (gaps not stored)
         sdsl::sd_vector<> bwt_intervals; // 1 at BWT positions where a run starts (including zero-length gap runs)
         bool first_run_is_gap = true; // 1 if first run is gap, 0 if first run is normal tag
 
-        // Lazy supports for run_starts
-        mutable sdsl::sd_vector<>::rank_1_type run_rank_support;
-        mutable sdsl::sd_vector<>::select_1_type run_select_support;
-        mutable std::once_flag run_rank_once;
-        mutable std::once_flag run_select_once;
+        // Eager supports for run_starts
+        sdsl::sd_vector<>::rank_1_type run_rank_support;
+        sdsl::sd_vector<>::select_1_type run_select_support;
     };
 
 }
