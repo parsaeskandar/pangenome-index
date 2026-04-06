@@ -15,13 +15,14 @@
 #include <map>
 #include <chrono>
 #include <iomanip>
+#include <atomic>
 
 using namespace std;
 using namespace panindexer;
 using namespace std::chrono;
 using namespace gbwtgraph;
 
-static bool debug = true;
+static std::atomic<bool> debug{false};
 
 struct TagResult {
     vector<size_t> query_offsets; // offsets within the query interval (relative to l)

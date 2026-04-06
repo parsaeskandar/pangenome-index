@@ -20,6 +20,7 @@
 #include <chrono>
 #include <iomanip>
 #include <random>
+#include <atomic>
 
 using namespace std;
 using namespace std::chrono;
@@ -34,7 +35,7 @@ using panindexer::SubpathInfo;
 using panindexer::TargetInterval;
 using panindexer::IntervalMapping;
 
-static bool debug = false;
+static std::atomic<bool> debug{false};
 
 // Structure to store tag information with source offsets
 struct TagInfo {

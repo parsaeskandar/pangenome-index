@@ -561,12 +561,12 @@ namespace panindexer {
     }
 
     // This function provide backward navigation in the BWT
-    std::pair <size_t, size_t> FastLocate::psi(size_t idx) {
+    std::pair <size_t, size_t> FastLocate::psi(size_t idx) const {
         size_t symbol = this->bwt_char_at(idx);
         return {symbol, this->C[this->sym_map[symbol]] + this->rankAt(idx, symbol)};
     }
 
-    std::pair<size_t, size_t> FastLocate::psi_encoded(size_t idx) {
+    std::pair<size_t, size_t> FastLocate::psi_encoded(size_t idx) const {
         // std::cerr << "psi_encoded: idx=" << idx << std::endl;
         size_t symbol = this->bwt_char_at_encoded(idx);
         // std::cerr << "symbol=" << symbol << std::endl;
@@ -576,7 +576,7 @@ namespace panindexer {
         return {symbol, next_pos};
     }
 
-    std::pair <size_t, size_t> FastLocate::psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position) {
+    std::pair <size_t, size_t> FastLocate::psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position) const {
         run_id = 0;
         current_position = 0;
         size_t symbol = this->bwt_char_at(idx);
@@ -823,7 +823,7 @@ namespace panindexer {
 
 
     // This function returns the exact number of runs, considering that each NENDMARKER is a separate run
-    size_type FastLocate::total_runs() {
+    size_type FastLocate::total_runs() const {
         // total_runs() must be post-construction/query-safe and independent of buff_reader cursor state.
         assert(this->buff_reader == nullptr && "FastLocate::total_runs() should not read from buff_reader at query time");
         return this->n_runs;
@@ -1541,7 +1541,7 @@ indexType(const FastLocate &) {
 // Functionalities for FMD-index to be able to handle bidirectional BWT
 
 // Backward extension from Algorithm 2 from Li's paper: doi:10.1093/bioinformatics/bts280
-FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) {
+FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, size_t a) const {
     size_t k = bint.forward;
     size_t k_prime = bint.reverse;
     int64_t s = bint.size;
@@ -1673,7 +1673,7 @@ FastLocate::bi_interval FastLocate::backward_extend(const bi_interval& bint, siz
 //
 //
 //
-FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) {
+FastLocate::bi_interval FastLocate::forward_extend(const bi_interval& bint, size_t symbol) const {
     bi_interval tmp = bi_interval(bint.reverse, bint.forward, bint.size);
     // print tmp
     // std::cerr << "tmp: " << tmp.forward << " " << tmp.reverse << " " << tmp.size << std::endl;

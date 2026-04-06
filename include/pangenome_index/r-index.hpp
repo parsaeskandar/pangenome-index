@@ -604,7 +604,7 @@ namespace panindexer {
 
 
         // just the backward navigation
-        size_t LF(size_t idx) {
+        size_t LF(size_t idx) const {
             if (this->is_encoded()) {
                 return this->psi_encoded(idx).second;
             } else {
@@ -644,11 +644,11 @@ namespace panindexer {
 
 
         // first is the symbol and the second is the next position index (backtrack)
-        std::pair <size_t, size_t> psi(size_t idx);
+        std::pair <size_t, size_t> psi(size_t idx) const;
 
-        std::pair <size_t, size_t> psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position);
+        std::pair <size_t, size_t> psi_and_run_id(size_t idx, size_t &run_id, size_t &current_position) const;
 
-        size_type total_runs();
+        size_type total_runs() const;
 
         // Return total number of runs (works for both encoded and unencoded blocks)
 
@@ -710,8 +710,8 @@ namespace panindexer {
 
 
         // FMD-index bidirectional extensions
-        bi_interval backward_extend(const bi_interval& bint, size_t symbol);
-        bi_interval forward_extend(const bi_interval& bint, size_t symbol);
+        bi_interval backward_extend(const bi_interval& bint, size_t symbol) const;
+        bi_interval forward_extend(const bi_interval& bint, size_t symbol) const;
 
         void initialize_complement_table();
 
@@ -750,8 +750,8 @@ namespace panindexer {
         size_t bwt_char_at_encoded(size_t idx) const;
         size_t rankAt_encoded(size_t pos, size_t symbol, size_t &run_id, size_t &current_position) const;
         std::vector<size_t> rank_at_cached_encoded(size_t pos) const;
-        std::pair<size_t, size_t> psi_encoded(size_t idx);
-        std::pair<size_t, size_t> psi_and_run_id_encoded(size_t idx, size_t &run_id, size_t &current_position);
+        std::pair<size_t, size_t> psi_encoded(size_t idx) const;
+        std::pair<size_t, size_t> psi_and_run_id_encoded(size_t idx, size_t &run_id, size_t &current_position) const;
         
         // Centralized per-block encoded operations helper
         struct EncodedBlock {
