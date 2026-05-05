@@ -18,13 +18,6 @@ struct TranslatedInterval {
     char strand;  // '+' or '-'
 };
 
-/// One step along a GBWT-graph alignment path (e.g. from Giraffe). Used for downstream haplotype resolution.
-struct GraphPathVisit {
-    int64_t node_id = 0;
-    bool is_reverse = false;
-    int32_t from_length = 0;
-};
-
 class Index {
 public:
     Index() = default;
@@ -53,9 +46,6 @@ public:
 
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;
-
-    /// Receive graph coordinates from an upstream mapper. Stub until haplotype walk is implemented.
-    void accept_graph_path(const std::vector<GraphPathVisit>& path);
 
 private:
     bool loaded_ = false;

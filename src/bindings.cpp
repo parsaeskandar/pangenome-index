@@ -20,16 +20,6 @@ PYBIND11_MODULE(liftover_ext, m) {
                    " strand=" + std::string(1, ti.strand) + ">";
         });
 
-    py::class_<GraphPathVisit>(m, "GraphPathVisit")
-        .def(py::init<>())
-        .def(py::init<int64_t, bool, int32_t>(),
-             py::arg("node_id"),
-             py::arg("is_reverse"),
-             py::arg("from_length"))
-        .def_readwrite("node_id", &GraphPathVisit::node_id)
-        .def_readwrite("is_reverse", &GraphPathVisit::is_reverse)
-        .def_readwrite("from_length", &GraphPathVisit::from_length);
-
     py::register_exception_translator([](std::exception_ptr p) {
         try {
             if (p) std::rethrow_exception(p);
@@ -55,8 +45,5 @@ PYBIND11_MODULE(liftover_ext, m) {
              py::arg("tgt_haplotype"),
              "Translate coordinates from source to target haplotype.")
         .def("get_haplotype_names", &Index::get_haplotype_names,
-             "Return list of valid haplotype names in the loaded index.")
-        .def("accept_graph_path", &Index::accept_graph_path,
-             py::arg("path"),
-             "Pass graph path visits from a mapper (stub; reserved for haplotype resolution).");
+             "Return list of valid haplotype names in the loaded index.");
 }

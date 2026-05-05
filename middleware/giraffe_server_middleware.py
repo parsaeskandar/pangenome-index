@@ -10,15 +10,12 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 
-FastqRead = Tuple[str, str, str]
-
-
-@dataclass
-class GiraffeAlignment:
-    """One GAF record and the graph path (node id, reverse on node, from_length per Mapping)."""
-
-    gaf_line: str
-    graph_path: List[Tuple[int, bool, int]]
+# Reads are accepted in either form:
+#   (name, sequence, quality)
+#   (name, sequence, quality, surjection_target)
+# An empty string in either of the trailing fields disables that feature for
+# that read (e.g. ("r1", "ACGT", "", "HG002#1#chr1") = no quality, surject).
+FastqRead = Tuple[str, ...]
 
 
 @dataclass
@@ -33,7 +30,10 @@ class GiraffeServerConfig:
     batch_size: int = 256
     output_timeout_s: float = 60.0
     extra_args: Optional[Sequence[str]] = None
-    emit_graph_path: bool = False
+    # Haplotype path names to pre-index for surjection. Each name is forwarded
+    # to giraffe-server as `--surject-target NAME`. If empty, per-read
+    # surjection requests will be reported as "not_indexed" by the server.
+    surject_target_paths: Sequence[str] = ()
 
 
 class GiraffeServerMiddleware:
@@ -83,8 +83,8 @@ class GiraffeServerMiddleware:
             str(self.cfg.batch_size),
             "--framed-output",
         ]
-        if self.cfg.emit_graph_path:
-            cmd.append("--emit-graph-path")
+        for target in self.cfg.surject_target_paths:
+            cmd.extend(["--surject-target", target])
         if self.cfg.extra_args:
             cmd.extend(self.cfg.extra_args)
 
@@ -136,11 +136,20 @@ class GiraffeServerMiddleware:
                 except Exception:
                     pass
 
-    def map_reads(self, reads: Iterable[FastqRead]) -> List[List[str]]:
-        if self.cfg.emit_graph_path:
-            raise ValueError(
-                "map_reads cannot parse output when emit_graph_path is enabled; use map_reads_with_graph_paths"
-            )
+    def map_reads(
+        self,
+        reads: Iterable[FastqRead],
+        surject_target: Optional[str] = None,
+    ) -> List[List[str]]:
+        """Send a batch of reads to giraffe-server and return one list of GAF
+        lines per input read (preserving order).
+
+        Each read may be a 3-tuple (name, sequence, quality) or a 4-tuple
+        (name, sequence, quality, surjection_target). The optional
+        `surject_target` argument applies a default target to every read in
+        the batch that doesn't have one explicitly. Empty string means "no
+        surjection".
+        """
         if self._proc is None:
             self.start()
         assert self._proc is not None
@@ -158,72 +167,51 @@ class GiraffeServerMiddleware:
                     "giraffe-server exited before request.\n" + self._format_stderr_tail()
                 )
 
-            for name, seq, qual in batch:
+            names: List[str] = []
+            for entry in batch:
+                if len(entry) == 3:
+                    name, seq, qual = entry
+                    target = surject_target or ""
+                elif len(entry) == 4:
+                    name, seq, qual, target = entry
+                    if not target and surject_target:
+                        target = surject_target
+                else:
+                    raise ValueError(
+                        "Each read must be (name, seq, qual) or (name, seq, qual, target)"
+                    )
                 if not name or not seq:
                     raise ValueError("Each read needs non-empty name and sequence")
                 if qual and len(seq) != len(qual):
                     raise ValueError(f"Read '{name}' has mismatched sequence/quality lengths")
-                if qual:
+
+                if target:
+                    # Always emit four fields when a surjection target is set;
+                    # an empty quality column is fine on the server side.
+                    proc.stdin.write(f"{name}\t{seq}\t{qual}\t{target}\n")
+                elif qual:
                     proc.stdin.write(f"{name}\t{seq}\t{qual}\n")
                 else:
                     proc.stdin.write(f"{name}\t{seq}\n")
+                names.append(name)
             # Tell server to process current buffered reads immediately.
-            proc.stdin.write("@@FLUSH@@\n")
+            proc.stdin.write("FLUSH_NOW\n")
             proc.stdin.flush()
 
-            return self._read_framed_batch(proc, [r[0] for r in batch])
+            return self._read_framed_batch(proc, names)
 
-    def map_reads_with_graph_paths(self, reads: Iterable[FastqRead]) -> List[List[GiraffeAlignment]]:
-        if not self.cfg.emit_graph_path:
-            raise ValueError("map_reads_with_graph_paths requires GiraffeServerConfig.emit_graph_path=True")
-        if self._proc is None:
-            self.start()
-        assert self._proc is not None
-        proc = self._proc
-
-        batch = list(reads)
-        if not batch:
-            return []
-
-        with self._lock:
-            if proc.stdin is None or proc.stdout is None:
-                raise RuntimeError("giraffe-server process streams are unavailable")
-            if proc.poll() is not None:
-                raise RuntimeError(
-                    "giraffe-server exited before request.\n" + self._format_stderr_tail()
-                )
-
-            for name, seq, qual in batch:
-                if not name or not seq:
-                    raise ValueError("Each read needs non-empty name and sequence")
-                if qual and len(seq) != len(qual):
-                    raise ValueError(f"Read '{name}' has mismatched sequence/quality lengths")
-                if qual:
-                    proc.stdin.write(f"{name}\t{seq}\t{qual}\n")
-                else:
-                    proc.stdin.write(f"{name}\t{seq}\n")
-            proc.stdin.write("@@FLUSH@@\n")
-            proc.stdin.flush()
-
-            return self._read_framed_batch_with_graph(proc, [r[0] for r in batch])
-
-    def map_sequences(self, sequences: Iterable[str]) -> List[List[str]]:
+    def map_sequences(
+        self,
+        sequences: Iterable[str],
+        surject_target: Optional[str] = None,
+    ) -> List[List[str]]:
         reads: List[FastqRead] = []
         for i, seq in enumerate(sequences):
             s = seq.strip().upper()
             if not s:
                 continue
             reads.append((f"read_{i}", s, "I" * len(s)))
-        return self.map_reads(reads)
-
-    def map_sequences_with_graph_paths(self, sequences: Iterable[str]) -> List[List[GiraffeAlignment]]:
-        reads: List[FastqRead] = []
-        for i, seq in enumerate(sequences):
-            s = seq.strip().upper()
-            if not s:
-                continue
-            reads.append((f"read_{i}", s, "I" * len(s)))
-        return self.map_reads_with_graph_paths(reads)
+        return self.map_reads(reads, surject_target=surject_target)
 
     @property
     def pid(self) -> Optional[int]:
@@ -239,7 +227,7 @@ class GiraffeServerMiddleware:
         out: List[List[str]] = []
         for expected_name in names:
             header = self._readline_with_timeout(proc, deadline)
-            if not header.startswith("@READ\t"):
+            if not header.startswith("READ\t"):
                 raise RuntimeError(
                     f"Unexpected framed header: {header!r}\n" + self._format_stderr_tail()
                 )
@@ -255,34 +243,6 @@ class GiraffeServerMiddleware:
             mapped: List[str] = []
             for _ in range(count):
                 mapped.append(self._readline_with_timeout(proc, deadline))
-            out.append(mapped)
-        return out
-
-    def _read_framed_batch_with_graph(
-        self, proc: subprocess.Popen[str], names: List[str]
-    ) -> List[List[GiraffeAlignment]]:
-        deadline = time.monotonic() + self.cfg.output_timeout_s
-        out: List[List[GiraffeAlignment]] = []
-        for expected_name in names:
-            header = self._readline_with_timeout(proc, deadline)
-            if not header.startswith("@READ\t"):
-                raise RuntimeError(
-                    f"Unexpected framed header: {header!r}\n" + self._format_stderr_tail()
-                )
-            parts = header.split("\t")
-            if len(parts) != 3:
-                raise RuntimeError(f"Malformed frame header: {header!r}")
-            read_name = parts[1]
-            if read_name != expected_name:
-                raise RuntimeError(
-                    f"Framed output out of order: expected {expected_name!r}, got {read_name!r}"
-                )
-            count = int(parts[2])
-            mapped: List[GiraffeAlignment] = []
-            for _ in range(count):
-                gaf_line = self._readline_with_timeout(proc, deadline)
-                graph_line = self._readline_with_timeout(proc, deadline)
-                mapped.append(GiraffeAlignment(gaf_line=gaf_line, graph_path=_parse_graph_line(graph_line)))
             out.append(mapped)
         return out
 
@@ -328,20 +288,3 @@ class GiraffeServerMiddleware:
             if not self._stderr_tail:
                 return "(no stderr captured from giraffe-server)"
             return "giraffe-server stderr (tail):\n" + "\n".join(self._stderr_tail)
-
-
-def _parse_graph_line(line: str) -> List[Tuple[int, bool, int]]:
-    if not line.startswith("@GRAPH"):
-        raise RuntimeError(f"Expected @GRAPH line after GAF, got: {line!r}")
-    fields = line.split("\t")[1:]
-    if not fields:
-        return []
-    if len(fields) % 3 != 0:
-        raise RuntimeError(f"Malformed @GRAPH line (expected triples): {line!r}")
-    out: List[Tuple[int, bool, int]] = []
-    for i in range(0, len(fields), 3):
-        node_id = int(fields[i])
-        is_rev = bool(int(fields[i + 1]))
-        from_len = int(fields[i + 2])
-        out.append((node_id, is_rev, from_len))
-    return out

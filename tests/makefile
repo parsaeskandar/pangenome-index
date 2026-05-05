@@ -13,8 +13,26 @@ MY_CXX ?= g++
 # Parallelization flags
 PARALLEL_FLAGS=-fopenmp -pthread
 
+# Match root makefile: prefer vendored gbwtgraph (GBZ v2).
+GBWTGRAPH_DIR ?= ../Giraffe_server/deps/gbwtgraph
+
+ifeq ($(wildcard $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a),)
+GBWTGRAPH_LIBS = -lgbwtgraph
+else
+GBWTGRAPH_LIBS = $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a
+endif
+
+# Match root makefile: Zstd for libgbwt (default ~/lib).
+ZSTD_LIB_DIR ?= $(HOME)/lib
+ifeq ($(strip $(ZSTD_LIB_DIR)),)
+ZSTD_LDFLAGS :=
+else
+ZSTD_LDFLAGS := -L$(ZSTD_LIB_DIR) -Wl,-rpath,$(ZSTD_LIB_DIR)
+endif
+GBWT_ZSTD_LIBS = $(ZSTD_LDFLAGS) -lzstd
+
 # Libraries - base libs without paths (paths added per-platform)
-BASE_LIBS=-lgbwt -lgbwtgraph -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt
+BASE_LIBS=$(GBWTGRAPH_LIBS) -lgbwt -lhandlegraph -lsdsl -ldivsufsort -ldivsufsort64 -lgrlbwt $(GBWT_ZSTD_LIBS)
 GTEST_LIBS=-lgtest -lgtest_main
 # Default LIBS for non-Darwin (will be overridden on Darwin)
 LIBS=-L$(LIB_DIR) -L../deps/grlBWT/build $(BASE_LIBS) $(GTEST_LIBS)
@@ -56,7 +74,7 @@ ifeq ($(shell uname -s), Darwin)
     LIBS := -L$(HOMEBREW_PREFIX)/lib -L$(LIB_DIR) -L../deps/grlBWT/build $(BASE_LIBS) -L$(LIBOMP_PATH) -lomp -L$(HOMEBREW_PREFIX)/opt/openssl/lib -lcrypto $(GTEST_LIBS)
 endif
 
-CXX_FLAGS += $(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -I../include -I$(INC_DIR) -I../lib -I../deps/r-index/internal -I../deps/vg -I../deps/grlBWT/include
+CXX_FLAGS += $(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -I../include -I$(GBWTGRAPH_DIR)/include -I$(INC_DIR) -I../lib -I../deps/r-index/internal -I../deps/vg -I../deps/grlBWT/include
 
 HEADERS=$(wildcard ../include/pangenome_index/*.hpp)
 

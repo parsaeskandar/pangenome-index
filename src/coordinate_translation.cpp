@@ -651,6 +651,27 @@ vector<TagInfo> find_tags_in_interval(FastLocate& r_index, SampledTagArray& samp
                             break;
                         }
                     }
+                    if (debug) {
+                        size_t check_source_base = r_index.seqOffset(current_text_pos);
+                        cerr << "  [fast path] check node_id=" << node_id
+                             << " is_rev=" << is_rev
+                             << " tag_code=" << tag_val
+                             << " source_base=" << check_source_base
+                             << " sa_values.size=" << sa_values.size()
+                             << " target_seq_id=" << target_seq_id
+                             << " target_passes=" << (target_passes ? "YES" : "no");
+                        if (!target_passes) {
+                            cerr << " (seq_ids visiting: ";
+                            size_t max_print = std::min<size_t>(sa_values.size(), 8);
+                            for (size_t i = 0; i < max_print; ++i) {
+                                if (i > 0) cerr << ",";
+                                cerr << gbwt_fast_locate->seqId(sa_values[i]);
+                            }
+                            if (sa_values.size() > max_print) cerr << ",...";
+                            cerr << ")";
+                        }
+                        cerr << endl;
+                    }
                     if (target_passes) {
                         // This is the last common node (first common we hit when walking backward from end)
                         found_last_common = true;
@@ -713,16 +734,126 @@ vector<TagInfo> find_tags_in_interval(FastLocate& r_index, SampledTagArray& samp
         }
     }
 
-    // Fast path was enabled but no last common node found: source and target share no node in this interval; no mapping possible
+    // Fast path: if no common node was found inside the interval (e.g. interval is too small
+    // to cover any sampled tag run), extend the BWT walk backward past text_pos_i down to the
+    // haplotype start, looking for the first source tag whose node is also visited by the target.
+    if (use_fast_path && !found_last_common) {
+        size_t text_pos_haplotype_start = r_index.pack(source_seq_id, 0);
+        if (debug) {
+            cerr << "  [extend] No common node in interval; extending backward past interval start "
+                 << "(text_pos_i=" << text_pos_i << ", haplotype_start=" << text_pos_haplotype_start << ")" << endl;
+        }
+        while (current_text_pos > text_pos_haplotype_start && !found_last_common) {
+            auto t_lf_start = high_resolution_clock::now();
+            current_text_pos--;
+            current_bwt_pos = r_index.LF(current_bwt_pos);
+            if (out_timing) {
+                out_timing->phase1_lf_count++;
+                out_timing->phase1_lf_ms += duration_cast<microseconds>(high_resolution_clock::now() - t_lf_start).count() / 1000.0;
+            }
+
+            size_t sampled_run_id = sampled.run_id_at(current_bwt_pos);
+            uint64_t tag_val = sampled.run_value(sampled_run_id);
+
+            if (debug) {
+                cerr << "  [extend] Text pos " << current_text_pos << " -> BWT pos " << current_bwt_pos
+                     << " -> tag=" << tag_val << " -> run_id=" << sampled_run_id << endl;
+            }
+
+            if (tag_val == 0) continue;
+
+            size_t seq_id_found = r_index.seqId(current_text_pos);
+            size_t offset_from_start = r_index.seqOffset(current_text_pos);
+            if (seq_id_found != source_seq_id) continue;
+
+            auto [ext_node_id, ext_is_rev] = decode_tag(tag_val);
+            gbwt::node_type ext_node = gbwt::Node::encode(ext_node_id, ext_is_rev);
+            std::vector<gbwt::size_type> sa_values = gbwt_fast_locate->decompressSA(ext_node);
+            bool target_passes = false;
+            for (size_t i = 0; i < sa_values.size(); ++i) {
+                if (gbwt_fast_locate->seqId(sa_values[i]) == target_seq_id) {
+                    target_passes = true;
+                    break;
+                }
+            }
+
+            if (debug) {
+                cerr << "  [extend] check node_id=" << ext_node_id << " is_rev=" << ext_is_rev
+                     << " tag_code=" << tag_val << " source_base=" << offset_from_start
+                     << " sa_values.size=" << sa_values.size()
+                     << " target_seq_id=" << target_seq_id
+                     << " target_passes=" << (target_passes ? "YES" : "no");
+                if (!target_passes) {
+                    cerr << " (seq_ids visiting: ";
+                    size_t max_print = std::min<size_t>(sa_values.size(), 8);
+                    for (size_t i = 0; i < max_print; ++i) {
+                        if (i > 0) cerr << ",";
+                        cerr << gbwt_fast_locate->seqId(sa_values[i]);
+                    }
+                    if (sa_values.size() > max_print) cerr << ",...";
+                    cerr << ")";
+                }
+                cerr << endl;
+            }
+
+            if (!target_passes) continue;
+
+            // Found a common node before the interval start: record as last common anchor.
+            found_last_common = true;
+            last_common_node = ext_node;
+            last_common_source_base = offset_from_start;
+
+            if (tag_map.find(tag_val) == tag_map.end()) {
+                tag_map[tag_val] = TagInfo{tag_val, {}, {}, {}};
+            }
+            tag_map[tag_val].source_offsets.push_back(offset_from_start);
+            tag_map[tag_val].source_bwt_positions.push_back(current_bwt_pos);
+            tag_map[tag_val].source_packed_positions.push_back(current_text_pos);
+
+            // Source visit's offset_in_node = i with smallest seqOffset (latest in path) — same as Phase 1.
+            gbwt::size_type source_offset_in_node = gbwt::invalid_offset();
+            gbwt::size_type min_seq_offset = gbwt::invalid_offset();
+            for (size_t i = 0; i < sa_values.size(); ++i) {
+                if (gbwt_fast_locate->seqId(sa_values[i]) == source_seq_id) {
+                    gbwt::size_type so = gbwt_fast_locate->seqOffset(sa_values[i]);
+                    if (min_seq_offset == gbwt::invalid_offset() || so < min_seq_offset) {
+                        min_seq_offset = so;
+                        source_offset_in_node = i;
+                    }
+                }
+            }
+            if (source_offset_in_node != gbwt::invalid_offset()) {
+                source_gbwt_edge = gbwt::edge_type(ext_node, source_offset_in_node);
+            }
+            if (out_timing) {
+                out_timing->found_last_common = true;
+                out_timing->last_common_source_base = last_common_source_base;
+            }
+            if (debug) {
+                cerr << "  [extend] Last common anchor found before interval: tag_code=" << tag_val
+                     << " (node_id=" << ext_node_id << ", is_rev=" << ext_is_rev << ")"
+                     << ", source_base=" << offset_from_start
+                     << " (interval starts at " << seq_start << ")" << endl;
+            }
+        }
+        if (debug && !found_last_common) {
+            cerr << "  [extend] No common source tag found before interval start (reached haplotype start)" << endl;
+        }
+    }
+
+    // Fast path was enabled but no last common node found (even after extending): no mapping possible.
     if (use_fast_path && !found_last_common) {
         auto elapsed_ms = duration_cast<milliseconds>(high_resolution_clock::now() - t_find_tags_start).count();
         cerr << "No last common node found between source and target in interval [" << seq_start << ", " << seq_end
-             << "]; no mapping possible. (total time: " << elapsed_ms << " ms)" << endl;
+             << "] (extended search reached haplotype start); no mapping possible. (total time: " << elapsed_ms << " ms)" << endl;
         return {};
     }
 
     // ----- Phase 2 (fast path only): From last common node, walk backward with GBWT inverseLF until offset < seq_start -----
-    if (use_fast_path && found_last_common && source_gbwt_edge.first != gbwt::ENDMARKER) {
+    // Skip Phase 2 if the anchor is already before seq_start (extended-search case): walking further
+    // backward would only collect tags outside the interval; the single anchor is enough for downstream.
+    if (use_fast_path && found_last_common && source_gbwt_edge.first != gbwt::ENDMARKER &&
+        last_common_source_base >= seq_start) {
         size_t current_base = last_common_source_base;
         gbwt::edge_type current_edge = source_gbwt_edge;
         
@@ -769,7 +900,7 @@ vector<TagInfo> find_tags_in_interval(FastLocate& r_index, SampledTagArray& samp
             current_base = new_base;
             current_edge = prev_edge;
         }
-    } else {
+    } else if (!use_fast_path) {
         // ----- No fast path: continue backward past interval start for one more tag (legacy behavior) -----
         size_t text_pos_haplotype_start = r_index.pack(source_seq_id, 0);
         bool found_tag_before_interval = false;
@@ -1874,37 +2005,49 @@ unordered_map<size_t, vector<size_t>> build_offset_mapping_with_gbwt_lf(
         cerr << "  Finding common nodes and mapping positions..." << endl;
     }
     
-    // Iterate through source path and find matching nodes in target path
+    // Iterate through source path. For each common node, emit per-base mappings for every base
+    // of the node that lies within [source_start, source_end]. Source and target traverse the
+    // same graph node, so within-node offsets are preserved 1:1.
     for (const auto& src_node : source_path) {
-        // Only map positions within the source interval
-        if (src_node.base_offset < source_start || src_node.base_offset > source_end) {
+        size_t src_node_len = graph.get_length(
+            graph.get_handle(gbwt::Node::id(src_node.node), gbwt::Node::is_reverse(src_node.node)));
+        size_t src_node_end = src_node.base_offset + src_node_len;  // exclusive
+
+        // Skip nodes whose coverage doesn't overlap [source_start, source_end].
+        if (src_node_end <= source_start || src_node.base_offset > source_end) {
             continue;
         }
-        
-        // Check if this tag_code exists in target path
+
         auto it = target_nodes_by_tag.find(src_node.tag_code);
-        if (it != target_nodes_by_tag.end()) {
-            // Found common node!
-            // NOTE: If there are multiple occurrences in target, we map to ALL of them
-            // This handles cases where paths diverge and reconverge
-            
-            if (it->second.size() > 1 && debug) {
-                cerr << "    Common node with MULTIPLE target occurrences: tag_code=" << src_node.tag_code 
-                     << " (" << it->second.size() << " occurrences)" << endl;
+        if (it == target_nodes_by_tag.end()) continue;
+
+        if (it->second.size() > 1 && debug) {
+            cerr << "    Common node with MULTIPLE target occurrences: tag_code=" << src_node.tag_code
+                 << " (" << it->second.size() << " occurrences)" << endl;
+        }
+
+        // Compute the slice of the source node that overlaps the query interval.
+        size_t overlap_start = std::max(src_node.base_offset, source_start);
+        size_t overlap_end   = std::min(src_node_end, source_end + 1);  // exclusive
+
+        for (size_t tgt_idx : it->second) {
+            const PathNode& tgt_node = target_path[tgt_idx];
+            for (size_t src_off = overlap_start; src_off < overlap_end; ++src_off) {
+                size_t within_node = src_off - src_node.base_offset;
+                size_t tgt_off = tgt_node.base_offset + within_node;
+                offset_map[src_off].push_back(tgt_off);
             }
-            
-            for (size_t tgt_idx : it->second) {
-                const PathNode& tgt_node = target_path[tgt_idx];
-                
-                // Store ALL mappings (multiple target offsets per source offset)
-                offset_map[src_node.base_offset].push_back(tgt_node.base_offset);
-                
-                if (debug) {
-                    cerr << "    Common node: tag_code=" << src_node.tag_code << endl;
-                    cerr << "      Source: base_offset=" << src_node.base_offset << ", node_offset=" << src_node.node_offset << endl;
-                    cerr << "      Target: base_offset=" << tgt_node.base_offset << ", node_offset=" << tgt_node.node_offset << endl;
-                    cerr << "      -> Mapped: " << src_node.base_offset << " -> " << tgt_node.base_offset << endl;
-                }
+            if (debug) {
+                cerr << "    Common node: tag_code=" << src_node.tag_code << endl;
+                cerr << "      Source: base_offset=" << src_node.base_offset
+                     << ", node_offset=" << src_node.node_offset
+                     << ", node_len=" << src_node_len << endl;
+                cerr << "      Target: base_offset=" << tgt_node.base_offset
+                     << ", node_offset=" << tgt_node.node_offset << endl;
+                cerr << "      -> Mapped per-base over [" << overlap_start << "," << overlap_end << ") "
+                     << "(" << (overlap_end - overlap_start) << " bases) to target ["
+                     << (tgt_node.base_offset + (overlap_start - src_node.base_offset)) << ","
+                     << (tgt_node.base_offset + (overlap_end - src_node.base_offset)) << ")" << endl;
             }
         }
     }

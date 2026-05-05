@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 #include <iostream>
+#include <fstream>
+#include <stdexcept>
 #include <omp.h>
 #include <queue>
 #include <mutex>
@@ -80,9 +82,17 @@ int main(int argc, char **argv) {
 
     FastLocate idx(rlbwt_file);
 
-    GBZ gbz;
+    gbwtgraph::GBZ gbz;
     cerr << "Loading the graph file" << endl;
-    sdsl::simple_sds::load_from(gbz, graph_file);
+    std::ifstream gbz_file(graph_file, std::ios::binary);
+    if (!gbz_file) {
+        throw std::runtime_error("Cannot open GBZ file: " + graph_file);
+    }
+    try {
+        gbz.simple_sds_load(gbz_file);
+    } catch (const std::exception& e) {
+        throw std::runtime_error("Failed to load GBZ: " + std::string(e.what()));
+    }
 
     typedef gbwtgraph::Key64::value_type kmer_type;
 

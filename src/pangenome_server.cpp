@@ -375,12 +375,6 @@ std::vector<std::string> Index::get_haplotype_names() const {
         }
     }
 
-       std::sort(result.begin(), result.end());
+    std::sort(result.begin(), result.end());
     return result;
-}
-
-void Index::accept_graph_path(const std::vector<GraphPathVisit>& path) {
-    if (!loaded_)
-        throw std::runtime_error("Index::accept_graph_path called before load()");
-    (void)path;
 }

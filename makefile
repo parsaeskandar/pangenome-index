@@ -13,13 +13,33 @@ MY_CXX ?= g++
 
 # Initial flags
 CXX_FLAGS += $(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS)
-CXX_FLAGS += -Iinclude -I$(INC_DIR) -Ideps/vg -Ideps/grlBWT/include -UNDEBUG
+# gbwtgraph headers must precede $(INC_DIR): older system installs lack GBZ v2 support.
+GBWTGRAPH_DIR ?= Giraffe_server/deps/gbwtgraph
+CXX_FLAGS += -Iinclude -I$(GBWTGRAPH_DIR)/include -I$(INC_DIR) -Ideps/vg -Ideps/grlBWT/include -UNDEBUG
+
+# Link vendored libgbwtgraph.a when built (make gbwtgraph-lib); else system -lgbwtgraph from $(LIB_DIR).
+ifeq ($(wildcard $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a),)
+GBWTGRAPH_LIBS = -lgbwtgraph
+$(info gbwtgraph: linking from $(LIB_DIR). If GBZ load fails on v2 graphs, run: make gbwtgraph-lib)
+else
+GBWTGRAPH_LIBS = $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a
+$(info gbwtgraph: linking vendored $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a)
+endif
+
+# Zstandard (required by libgbwt). Default ~/lib for user installs; set ZSTD_LIB_DIR= for system-only paths.
+ZSTD_LIB_DIR ?= $(HOME)/lib
+ifeq ($(strip $(ZSTD_LIB_DIR)),)
+ZSTD_LDFLAGS :=
+else
+ZSTD_LDFLAGS := -L$(ZSTD_LIB_DIR) -Wl,-rpath,$(ZSTD_LIB_DIR)
+endif
+GBWT_ZSTD_LIBS = $(ZSTD_LDFLAGS) -lzstd
 
 # Parallelization flags
 PARALLEL_FLAGS = -fopenmp -pthread
 
-# Libraries
-LIBS = -L$(LIB_DIR) -Ldeps/grlBWT/build -lgbwtgraph -lgbwt -lhandlegraph -lsdsl -lgrlbwt -lcrypto
+# Libraries (gbwtgraph before gbwt for correct static resolution)
+LIBS = -L$(LIB_DIR) -Ldeps/grlBWT/build $(GBWTGRAPH_LIBS) -lgbwt -lhandlegraph -lsdsl -lgrlbwt -lcrypto $(GBWT_ZSTD_LIBS)
 
 # macOS-specific OpenMP & compiler handling
 ifeq ($(shell uname -s), Darwin)
@@ -64,13 +84,17 @@ LIBRARY = $(BUILD_LIB)/libpanindexer.a
 PROGRAMS = $(addprefix $(BUILD_BIN)/,build_tags merge_tags build_rindex query_tags tags_check find_mems convert_tags print_stats build_sampled_tags query_sampled_tags coordinate_translation build_translation_tables)
 
 # Targets
-.PHONY: all clean directories grlbwt test
+.PHONY: all clean directories grlbwt gbwtgraph-lib test
 
 all: grlbwt directories $(LIBRARY) $(PROGRAMS)
 
 grlbwt:
 	mkdir -p deps/grlBWT/build
 	cd deps/grlBWT/build && cmake .. && make
+
+# Build static libgbwtgraph.a into $(GBWTGRAPH_DIR)/lib (requires SDSL_DIR, gbwt/handlegraph in LIB_DIR).
+gbwtgraph-lib:
+	$(MAKE) -C "$(GBWTGRAPH_DIR)" SDSL_DIR="$(SDSL_DIR)" all
 
 directories: $(BUILD_BIN) $(BUILD_LIB) $(BUILD_OBJ)
 

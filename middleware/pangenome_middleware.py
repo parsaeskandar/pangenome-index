@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 import liftover_ext
 
 from .giraffe_server_middleware import (
     FastqRead,
-    GiraffeAlignment,
     GiraffeServerConfig,
     GiraffeServerMiddleware,
 )
@@ -53,15 +52,5 @@ class PangenomeMiddleware:
     def map_reads(self, reads: Iterable[FastqRead]) -> List[List[str]]:
         return self._giraffe.map_reads(reads)
 
-    def map_reads_with_graph_paths(self, reads: Iterable[FastqRead]) -> List[List[GiraffeAlignment]]:
-        return self._giraffe.map_reads_with_graph_paths(reads)
-
     def map_sequences(self, sequences: Iterable[str]) -> List[List[str]]:
         return self._giraffe.map_sequences(sequences)
-
-    def map_sequences_with_graph_paths(self, sequences: Iterable[str]) -> List[List[GiraffeAlignment]]:
-        return self._giraffe.map_sequences_with_graph_paths(sequences)
-
-    def accept_graph_path(self, graph_path: List[Tuple[int, bool, int]]) -> None:
-        visits = [liftover_ext.GraphPathVisit(int(n), bool(rev), int(fl)) for n, rev, fl in graph_path]
-        self._coord.accept_graph_path(visits)
