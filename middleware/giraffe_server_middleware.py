@@ -26,7 +26,9 @@ class GiraffeServerConfig:
     distance_path: str
     zipcode_path: str
     threads: int = 8
-    max_multimaps: int = 1
+    # 0 means "use giraffe-server's built-in BLAT default (100)". Any value
+    # > 0 is forwarded as `-M N` and overrides the BLAT default.
+    max_multimaps: int = 0
     batch_size: int = 256
     output_timeout_s: float = 60.0
     extra_args: Optional[Sequence[str]] = None
@@ -44,7 +46,7 @@ class GiraffeServerMiddleware:
         self._proc: Optional[subprocess.Popen[str]] = None
         self._lock = threading.Lock()
         self._stderr_tail: deque[str] = deque(maxlen=200)
-        self._stderr_lock = threading.Lock()
+        self._stderr_cond = threading.Condition()  # notified on every new stderr line
         self._stderr_thread: Optional[threading.Thread] = None
         self._stdout_lines: deque[str] = deque()
         self._stdout_cond = threading.Condition()
@@ -77,12 +79,14 @@ class GiraffeServerMiddleware:
             self.cfg.zipcode_path,
             "-t",
             str(self.cfg.threads),
-            "-M",
-            str(self.cfg.max_multimaps),
             "-b",
             str(self.cfg.batch_size),
             "--framed-output",
         ]
+        # Only forward -M when explicitly set; 0 means "use the engine's
+        # BLAT default (100)".
+        if self.cfg.max_multimaps > 0:
+            cmd.extend(["-M", str(self.cfg.max_multimaps)])
         for target in self.cfg.surject_target_paths:
             cmd.extend(["--surject-target", target])
         if self.cfg.extra_args:
@@ -275,16 +279,28 @@ class GiraffeServerMiddleware:
                 self._stdout_closed = True
                 self._stdout_cond.notify_all()
 
+    def wait_until_ready(self) -> None:
+        """Block indefinitely until giraffe-server responds to a probe read.
+        This is the only reliable signal that all indexes have finished loading."""
+        saved_timeout = self.cfg.output_timeout_s
+        # float("inf") as deadline means _readline_with_timeout waits forever.
+        self.cfg.output_timeout_s = float("inf")
+        try:
+            self.map_reads([("__probe__", "ACGTACGTACGTACGTACGT", "IIIIIIIIIIIIIIIIIIII")])
+        finally:
+            self.cfg.output_timeout_s = saved_timeout
+
     def _drain_stderr(self, stderr_stream) -> None:
         try:
             for line in stderr_stream:
-                with self._stderr_lock:
+                with self._stderr_cond:
                     self._stderr_tail.append(line.rstrip("\n"))
+                    self._stderr_cond.notify_all()
         except Exception:
             pass
 
     def _format_stderr_tail(self) -> str:
-        with self._stderr_lock:
+        with self._stderr_cond:
             if not self._stderr_tail:
                 return "(no stderr captured from giraffe-server)"
             return "giraffe-server stderr (tail):\n" + "\n".join(self._stderr_tail)
