@@ -3,9 +3,11 @@
 
 #include "pangenome_index/r-index.hpp"
 #include "pangenome_index/sampled_tag_array.hpp"
+#include "pangenome_index/surject_anchor_builder.hpp"
 #include "pangenome_index/translation_tables.hpp"
 #include <gbwt/fast_locate.h>
 #include <gbwtgraph/gbz.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,6 +18,36 @@ struct TranslatedInterval {
     int64_t start;
     int64_t end;
     char strand;  // '+' or '-'
+};
+
+/// Plain-data version of a PrecomputedAnchor suitable for Python bindings.
+/// Same fields as panindexer::PrecomputedAnchor, with step_handle_t replaced
+/// by a portable (node, offset) pair (the gbwtgraph step encoding —
+/// gbwtgraph.cpp:911-1024 stores edge.first/edge.second into as_integers(step)).
+struct AnchorRecord {
+    /// Source-mapping range covered by this anchor (read order).
+    uint64_t source_mapping_begin = 0;
+    uint64_t source_mapping_end = 0;
+    /// Read range covered.
+    uint64_t read_begin_offset = 0;
+    uint64_t read_end_offset = 0;
+    /// Base positions on the target path.
+    uint64_t path_offset_step_begin = 0;
+    uint64_t path_offset_step_end = 0;
+    /// GBWT search states (= gbwt::edge_type). Pairs of (node, offset_in_record).
+    /// step_handle reconstruction: as_integers(step)[0]=node, [1]=offset.
+    uint64_t gbwt_edge_begin_node = 0;
+    uint64_t gbwt_edge_begin_offset = 0;
+    uint64_t gbwt_edge_end_node = 0;
+    uint64_t gbwt_edge_end_offset = 0;
+};
+
+struct AnchorBuildPyResult {
+    /// One of: "ok", "empty_alignment", "unknown_path", "no_common_nodes".
+    std::string status;
+    std::vector<AnchorRecord> anchors;
+    uint64_t target_path_length = 0;
+    bool target_rev_strand = false;
 };
 
 class Index {

@@ -30,7 +30,11 @@ using namespace panindexer;
 
 
 void usage(const char* program_name) {
-    std::cerr << "Usage: " << program_name << " [OPTIONS] <graph_file> <rlbwt_file> <output_file>" << std::endl;
+    std::cerr << "Usage: " << program_name << " [OPTIONS] <graph_file> <index_file> <output_file>" << std::endl;
+    std::cerr << std::endl;
+    std::cerr << "  <index_file>  Either a grlBWT file (.rl_bwt) to build the r-index from," << std::endl;
+    std::cerr << "                or a pre-built r-index file (.ri) to load directly." << std::endl;
+    std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -k <size>     K-mer size (default: 31)" << std::endl;
     std::cerr << "  -h            Print this help message" << std::endl;
@@ -68,7 +72,7 @@ int main(int argc, char **argv) {
     }
     
     std::string graph_file = std::string(argv[optind]);
-    std::string rlbwt_file = std::string(argv[optind + 1]);
+    std::string index_file = std::string(argv[optind + 1]);
     std::string output_file = std::string(argv[optind + 2]);
     
     if (k == 0) {
@@ -78,9 +82,21 @@ int main(int argc, char **argv) {
     
 //    omp_set_num_threads(threads);
 
-
-
-    FastLocate idx(rlbwt_file);
+    FastLocate idx;
+    bool use_prebuilt_ri = (index_file.size() >= 3 &&
+                            index_file.substr(index_file.size() - 3) == ".ri");
+    if (use_prebuilt_ri) {
+        std::cerr << "Loading pre-built r-index from " << index_file << std::endl;
+        std::ifstream ri_in(index_file, std::ios::binary);
+        if (!ri_in) {
+            std::cerr << "Error: Cannot open r-index file: " << index_file << std::endl;
+            return 1;
+        }
+        idx.load(ri_in);
+    } else {
+        std::cerr << "Building r-index from grlBWT file " << index_file << std::endl;
+        idx = FastLocate(index_file);
+    }
 
     gbwtgraph::GBZ gbz;
     cerr << "Loading the graph file" << endl;

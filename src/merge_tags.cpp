@@ -438,7 +438,7 @@ int main(int argc, char **argv) {
 #endif
 
 
-    int threads = 64;
+    int threads = omp_get_max_threads();
     omp_set_num_threads(threads);
 
     std::string gbz_graph = std::string(argv[1]);
@@ -595,7 +595,7 @@ int main(int argc, char **argv) {
 
 
     // ############################################## variables to change
-    size_t run_per_thread = 5000;
+    size_t run_per_thread = 500;
     int encoded_start_every_k_run = 10;
 
 

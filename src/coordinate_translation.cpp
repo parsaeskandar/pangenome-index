@@ -2198,6 +2198,7 @@ vector<TranslationResult> trace_coordinates(
     return translations;
 }
 
+#ifndef COORDINATE_TRANSLATION_NO_MAIN
 int main(int argc, char** argv) {
     if (argc < 4) {
         usage(argv[0]);
@@ -3418,6 +3419,7 @@ int main(int argc, char** argv) {
         cerr << "  Total (excluding load): " << duration_excl_load.count() << " ms" << endl;
         cerr << "  Total (including load): " << duration_total.count() << " ms" << endl;
     }
-    
+
     return 0;
 }
+#endif // COORDINATE_TRANSLATION_NO_MAIN
