@@ -37,6 +37,7 @@ void usage(const char* program_name) {
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -k <size>     K-mer size (default: 31)" << std::endl;
+    std::cerr << "  -t <threads>  Number of threads (default: 8)" << std::endl;
     std::cerr << "  -h            Print this help message" << std::endl;
 }
 
@@ -46,12 +47,19 @@ int main(int argc, char **argv) {
     
     // Parse optional arguments
     int opt;
-    while ((opt = getopt(argc, argv, "k:h")) != -1) {
+    while ((opt = getopt(argc, argv, "k:t:h")) != -1) {
         switch (opt) {
             case 'k':
                 k = std::stoul(optarg);
                 if (k == 0) {
                     std::cerr << "Error: k-mer size must be greater than 0" << std::endl;
+                    return 1;
+                }
+                break;
+            case 't':
+                threads = std::stoi(optarg);
+                if (threads <= 0) {
+                    std::cerr << "Error: number of threads must be greater than 0" << std::endl;
                     return 1;
                 }
                 break;
@@ -80,7 +88,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     
-//    omp_set_num_threads(threads);
+    omp_set_num_threads(threads);
 
     FastLocate idx;
     bool use_prebuilt_ri = (index_file.size() >= 3 &&
