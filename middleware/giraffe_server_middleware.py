@@ -217,6 +217,71 @@ class GiraffeServerMiddleware:
             reads.append((f"read_{i}", s, "I" * len(s)))
         return self.map_reads(reads, surject_target=surject_target)
 
+    def surject_with_anchors(
+        self,
+        graph_alignment_gaf: str,
+        anchors,
+        target_haplotype: str,
+        target_path_length: int = 0,
+        read_name: Optional[str] = None,
+    ) -> List[str]:
+        """Surject a graph alignment onto `target_haplotype` using pre-computed
+        anchors, via the SURJECT_WITH_ANCHORS stdin command on giraffe-server.
+        Returns one GAF line per surjected mapping (typically one) with
+        surjection tags (sj:Z:, sn:Z:, sp:i:, sr:i:, ss:i:, sm:i:, sc:Z:)
+        appended.
+        """
+        if self._proc is None:
+            self.start()
+        assert self._proc is not None
+        proc = self._proc
+
+        # Extract a read name from the GAF first column if the caller didn't
+        # provide one explicitly. The server echoes this in the framed header.
+        if read_name is None:
+            tab = graph_alignment_gaf.find("\t")
+            read_name = graph_alignment_gaf[:tab] if tab > 0 else "anchor_read"
+        if not read_name:
+            raise ValueError("surject_with_anchors: read name is empty")
+
+        # `anchors` is the list returned by liftover_ext.Index.build_surject_anchors —
+        # each entry has the same fields we serialize on the wire.
+        anchor_list = list(anchors) if anchors is not None else []
+        n_anchors = len(anchor_list)
+        path_len = int(target_path_length) if target_path_length else 0
+
+        with self._lock:
+            if proc.stdin is None or proc.stdout is None:
+                raise RuntimeError("giraffe-server process streams are unavailable")
+            if proc.poll() is not None:
+                raise RuntimeError(
+                    "giraffe-server exited before request.\n" + self._format_stderr_tail()
+                )
+
+            # Header line: SURJECT_WITH_ANCHORS\t<name>\t<target>\t<path_len>\t<n_anchors>
+            proc.stdin.write(
+                f"SURJECT_WITH_ANCHORS\t{read_name}\t{target_haplotype}\t"
+                f"{path_len}\t{n_anchors}\n"
+            )
+            # n_anchors anchor lines (10 fields each).
+            for a in anchor_list:
+                proc.stdin.write(
+                    f"{a.gbwt_edge_begin_node}\t{a.gbwt_edge_begin_offset}\t"
+                    f"{a.gbwt_edge_end_node}\t{a.gbwt_edge_end_offset}\t"
+                    f"{a.path_offset_step_begin}\t{a.path_offset_step_end}\t"
+                    f"{a.read_begin_offset}\t{a.read_end_offset}\t"
+                    f"{a.source_mapping_begin}\t{a.source_mapping_end}\n"
+                )
+            # Final line: the graph alignment GAF.
+            proc.stdin.write(graph_alignment_gaf)
+            if not graph_alignment_gaf.endswith("\n"):
+                proc.stdin.write("\n")
+            proc.stdin.flush()
+
+            # Read the framed response — one READ frame for this request.
+            result = self._read_framed_batch(proc, [read_name])
+            return result[0] if result else []
+
     @property
     def pid(self) -> Optional[int]:
         if self._proc is None:
@@ -264,7 +329,9 @@ class GiraffeServerMiddleware:
                     raise RuntimeError(
                         "Timed out waiting for giraffe-server output.\n" + self._format_stderr_tail()
                     )
-                self._stdout_cond.wait(timeout=remaining)
+                # None means block forever — avoids platform time_t overflow when
+                # deadline is float("inf") (used by wait_until_ready probe).
+                self._stdout_cond.wait(timeout=None if remaining == float("inf") else remaining)
 
     def _drain_stdout(self, stdout_stream) -> None:
         try:

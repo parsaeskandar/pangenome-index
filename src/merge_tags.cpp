@@ -22,6 +22,9 @@
 #include <utility>
 #include <stdexcept>
 #include <algorithm>
+#include <chrono>
+#include <limits>
+#include <memory>
 
 
 #ifndef TIME
@@ -285,6 +288,133 @@ private:
 };
 
 
+// =============================================================================
+// In-memory tag store (used by --in-memory mode).
+//
+// Decodes every tag file into RAM at startup (in parallel across files), then
+// exposes:
+//   * the same minimal interface FileReader exposes for main()
+//     (get_file_num/get_first_tag/get_next_tag), so the shared setup code can
+//     drive either reader via lambdas;
+//   * random-access reads of the underlying run vector for workers, which
+//     bypass the global round-robin lock that bottlenecked the streaming path.
+// =============================================================================
+class InMemoryTagStore {
+public:
+    InMemoryTagStore(const std::vector<std::string>& files, size_t n_threads_for_load = 0)
+        : files_(files) {
+        if (files.empty()) {
+            throw std::invalid_argument("File list cannot be empty.");
+        }
+        runs_.resize(files.size());
+        cursor_run_.assign(files.size(), 0);
+        cursor_intra_.assign(files.size(), 0);
+
+        std::cerr << "[in-memory] Loading " << files.size()
+                  << " tag files fully into RAM..." << std::endl;
+        auto t0 = std::chrono::high_resolution_clock::now();
+
+        size_t nt = (n_threads_for_load == 0)
+                        ? static_cast<size_t>(omp_get_max_threads())
+                        : n_threads_for_load;
+        nt = std::max<size_t>(1, std::min(nt, files.size()));
+
+        std::atomic<bool> failed{false};
+        std::string fail_msg;
+
+        #pragma omp parallel for num_threads(nt) schedule(dynamic)
+        for (size_t i = 0; i < files.size(); ++i) {
+            if (failed.load()) continue;
+            try {
+                sdsl::int_vector_buffer<8> in(files_[i], std::ios::in);
+                if (!in.is_open()) {
+                    failed.store(true);
+                    #pragma omp critical
+                    { fail_msg = "Cannot open file: " + files_[i]; }
+                    continue;
+                }
+                std::vector<std::pair<pos_t, uint16_t>>& runs = runs_[i];
+                gbwt::size_type pos = 0;
+                const gbwt::size_type sz = in.size();
+                // Heuristic reserve: typical ByteCode entry is ~2-5 bytes/run.
+                runs.reserve(std::max<size_t>(1024, sz / 3));
+                while (pos < sz) {
+                    auto blk = panindexer::TagArray::decode_run(
+                            gbwt::ByteCode::read(in, pos));
+                    runs.push_back(blk);
+                }
+                runs.shrink_to_fit();
+            } catch (std::exception& e) {
+                failed.store(true);
+                #pragma omp critical
+                { fail_msg = std::string("Exception while loading ") + files_[i] +
+                             ": " + e.what(); }
+            }
+        }
+        if (failed.load()) throw std::runtime_error(fail_msg);
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> dt = t1 - t0;
+
+        size_t total_runs = 0;
+        size_t total_tags = 0;
+        for (size_t i = 0; i < files.size(); ++i) {
+            size_t file_tags = 0;
+            for (const auto& p : runs_[i]) file_tags += p.second;
+            total_runs += runs_[i].size();
+            total_tags += file_tags;
+            std::cerr << "  " << files_[i] << ": " << runs_[i].size()
+                      << " runs / " << file_tags << " tags" << std::endl;
+        }
+        std::cerr << "[in-memory] Loaded " << total_runs << " runs / "
+                  << total_tags << " tags in " << dt.count() << " s" << std::endl;
+    }
+
+    // -------- FileReader-compatible interface (used by shared setup) --------
+    int get_file_num() const { return static_cast<int>(files_.size()); }
+
+    pos_t get_first_tag(int f) const {
+        return runs_[f][0].first;
+    }
+
+    // Streaming-style cursor advance: returns the tag at the current cursor and
+    // advances by one. Used by main() during the partial-first-run prefix.
+    pos_t get_next_tag(int f) {
+        if (cursor_run_[f] >= runs_[f].size()) {
+            std::cerr << "InMemoryTagStore::get_next_tag: out of tags in "
+                      << files_[f] << std::endl;
+            return pos_t{0, 0, 0};
+        }
+        pos_t res = runs_[f][cursor_run_[f]].first;
+        cursor_intra_[f]++;
+        if (cursor_intra_[f] >= runs_[f][cursor_run_[f]].second) {
+            cursor_run_[f]++;
+            cursor_intra_[f] = 0;
+        }
+        return res;
+    }
+
+    // -------- Random-access interface (used by workers) --------
+    const std::vector<std::pair<pos_t, uint16_t>>& runs(int f) const {
+        return runs_[f];
+    }
+
+    // Returns the (run_index, intra_run_offset) cursor as left by the
+    // streaming get_next_tag prefix consumption. Workers use these as the
+    // starting point for computing per-batch start positions.
+    size_t cursor_run(int f)   const { return cursor_run_[f]; }
+    size_t cursor_intra(int f) const { return cursor_intra_[f]; }
+
+private:
+    std::vector<std::string> files_;
+    // runs_[f] is the full decoded run list of file f.
+    std::vector<std::vector<std::pair<pos_t, uint16_t>>> runs_;
+    // Streaming cursor for get_next_tag (one per file).
+    std::vector<size_t> cursor_run_;
+    std::vector<size_t> cursor_intra_;
+};
+
+
 // This function extract the tags starting from the starting_run first position to the starting_run + runs_per_thread last position
 void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t thread_id, std::vector<int> comp_to_file,
                         std::vector<size_t> seq_id_to_comp_id, std::vector<std::pair<pos_t, uint16_t>> &buffer,
@@ -410,6 +540,353 @@ void extract_tags_batch(const FastLocate &r_index, FileReader &reader, size_t th
 }
 
 
+// =============================================================================
+// In-memory merge pipeline.
+//
+// Replaces the streaming worker pool (extract_tags_batch + FileReader's
+// strict round-robin) with a 3-stage parallel pipeline that obeys the only
+// real ordering constraints: per-file FIFO consumption across batches, and
+// batch-ID-ordered output. Everything else runs free.
+//
+//   Phase 1 (parallel, no locks): each batch walks its BWT range via
+//     locateNext, producing request[b][f] and index_to_file[b].
+//   Coordinator (sequential per file, parallel across files): walks each
+//     file's run list once, computing the (run_idx, intra_offset) starting
+//     position for every batch from the per-batch request counts.
+//   Phase 2+3 (parallel, no locks): each batch initializes its per-file
+//     cursors from the coordinator output, walks its index_to_file array,
+//     reads tags straight out of RAM, and builds a local run-length buffer.
+//   Writer (sequential, batch-ID order): mirrors the existing writer logic,
+//     including the previous_last_run merge/flush bookkeeping.
+//
+// Caller contract: previous_last_run has been seeded by the partial-first-run
+// prefix in main(), tag_array is already streaming-encoding via the same
+// sidecar files used by the streaming path, starting_run points at the first
+// run beyond the prefix, and the sidecar/output streams are open.
+// =============================================================================
+void merge_in_memory_pipeline(
+        const FastLocate& r_index,
+        InMemoryTagStore& store,
+        const std::vector<int>& comp_to_file,
+        const std::vector<size_t>& seq_id_to_comp_id,
+        panindexer::TagArray& tag_array,
+        std::ofstream& out_encoded_starts,
+        std::ofstream& out_bwt_intervals,
+        std::pair<pos_t, uint16_t>& previous_last_run,
+        size_t& tag_run_count,
+        size_t starting_run,
+        size_t run_per_thread,
+        int threads,
+        size_t chunk_size)
+{
+    const size_t F = static_cast<size_t>(store.get_file_num());
+    const size_t total_runs_r = r_index.tot_runs();
+    if (starting_run >= total_runs_r) {
+        std::cerr << "[in-memory] starting_run >= tot_runs; nothing to do" << std::endl;
+        return;
+    }
+    const size_t num_batches =
+        (total_runs_r - starting_run + run_per_thread - 1) / run_per_thread;
+
+    // Chunk the pipeline so transient Phase-1 / coordinator / result-buffer
+    // memory is bounded by a window of batches, not the entire input. The tag
+    // store itself (the actual tags) stays resident the whole time -- this
+    // bound only affects the per-batch metadata. See the OOM analysis in the
+    // commit message / discussion: with millions of batches, holding every
+    // batch's index_to_file[] simultaneously is what blows up.
+    if (chunk_size == 0) chunk_size = 16384;
+    chunk_size = std::min(chunk_size, num_batches);
+    const size_t num_chunks = (num_batches + chunk_size - 1) / chunk_size;
+
+    std::cerr << "[in-memory] " << num_batches << " batches across "
+              << threads << " threads (run_per_thread=" << run_per_thread
+              << ", F=" << F << ", chunk_size=" << chunk_size
+              << ", num_chunks=" << num_chunks << ")" << std::endl;
+
+    // Use uint8_t for file ids if we have <=255 files; uint16_t otherwise.
+    // This halves the memory footprint of index_to_file across all batches.
+    const bool small_file_ids = (F <= 255);
+
+    // Per-file cursors carried ACROSS chunks. Start from wherever main()'s
+    // partial-first-run prefix left the InMemoryTagStore cursor.
+    std::vector<size_t> file_run_cursor(F);
+    std::vector<size_t> file_intra_cursor(F);
+    for (size_t f = 0; f < F; ++f) {
+        file_run_cursor[f]   = store.cursor_run(static_cast<int>(f));
+        file_intra_cursor[f] = store.cursor_intra(static_cast<int>(f));
+    }
+
+    // Precompute the sample at the start of the last run; used by the tail
+    // batch (only) to detect when it has reached the absolute end of the BWT.
+    const size_t last_run_first_sample = r_index.getSample(total_runs_r - 1);
+
+    // Cumulative timing across chunks.
+    double tot_p1 = 0.0, tot_co = 0.0, tot_p2 = 0.0, tot_w = 0.0;
+
+    for (size_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+        const size_t batch_lo = chunk_idx * chunk_size;
+        const size_t batch_hi = std::min(num_batches, batch_lo + chunk_size);
+        const size_t M = batch_hi - batch_lo;
+        if (M == 0) continue;
+
+        if (chunk_idx % 10 == 0 || chunk_idx + 1 == num_chunks) {
+            std::cerr << "[in-memory] Chunk " << (chunk_idx + 1) << "/" << num_chunks
+                      << ": batches [" << batch_lo << ", " << batch_hi << ")"
+                      << std::endl;
+        }
+
+        // Per-chunk transient state. Allocated and freed inside the loop so
+        // peak memory is bounded by M, not num_batches.
+        std::vector<std::vector<uint8_t>>  itf8;
+        std::vector<std::vector<uint16_t>> itf16;
+        if (small_file_ids) itf8.resize(M);
+        else                itf16.resize(M);
+        std::vector<std::vector<size_t>> request(M, std::vector<size_t>(F, 0));
+
+        // ------------------------------ Phase 1 ------------------------------
+        // Parallel locateNext walks for the M batches in this chunk.
+        auto t_p1 = std::chrono::high_resolution_clock::now();
+
+        #pragma omp parallel for schedule(dynamic) num_threads(threads)
+        for (size_t bi = 0; bi < M; ++bi) {
+            const size_t b = batch_lo + bi;
+            const size_t s = starting_run + b * run_per_thread;
+            const size_t e = std::min(s + run_per_thread, total_runs_r);
+
+            size_t end_sentinel;
+            size_t last_run_sentinel;
+            if (e >= total_runs_r) {
+                end_sentinel      = static_cast<size_t>(-1);
+                last_run_sentinel = last_run_first_sample;
+            } else {
+                end_sentinel      = r_index.getSample(e);
+                last_run_sentinel = static_cast<size_t>(-1);
+            }
+
+            size_t idx = r_index.getSample(s);
+            std::vector<size_t>& req = request[bi];
+
+            const size_t reserve_hint = (e - s) * 16;
+            if (small_file_ids) itf8[bi].reserve(reserve_hint);
+            else                itf16[bi].reserve(reserve_hint);
+
+            while (idx != end_sentinel && idx != last_run_sentinel) {
+                const size_t sid = r_index.seqId(idx);
+                const int    fid = comp_to_file[seq_id_to_comp_id[sid]];
+                if (small_file_ids) itf8[bi].push_back(static_cast<uint8_t>(fid));
+                else                itf16[bi].push_back(static_cast<uint16_t>(fid));
+                req[fid] += 1;
+                idx = r_index.locateNext(idx);
+            }
+
+            if (idx == last_run_sentinel) {
+                const int last_run_size = static_cast<int>(r_index.last_run_size_global());
+                for (int i = 0; i < last_run_size; ++i) {
+                    const size_t sid = r_index.seqId(idx);
+                    const int    fid = comp_to_file[seq_id_to_comp_id[sid]];
+                    if (small_file_ids) itf8[bi].push_back(static_cast<uint8_t>(fid));
+                    else                itf16[bi].push_back(static_cast<uint16_t>(fid));
+                    req[fid] += 1;
+                    if (i == last_run_size - 1) break;
+                    idx = r_index.locateNext(idx);
+                }
+            }
+        }
+
+        tot_p1 += std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - t_p1).count();
+
+        // ----------------------------- Coordinator ----------------------------
+        // For each (batch, file) in this chunk, record the per-file
+        // (run_idx, intra) starting position. Sequential per file, parallel
+        // across files. The cursor state at the end of this chunk is carried
+        // over to the next chunk via file_{run,intra}_cursor.
+        auto t_co = std::chrono::high_resolution_clock::now();
+
+        std::vector<std::vector<size_t>>   batch_start_run(M);
+        std::vector<std::vector<uint32_t>> batch_start_intra(M);
+        for (size_t bi = 0; bi < M; ++bi) {
+            batch_start_run[bi].assign(F, 0);
+            batch_start_intra[bi].assign(F, 0);
+        }
+        // End-of-chunk cursors per file; written by the parallel-for, then
+        // copied into file_{run,intra}_cursor after the parallel section.
+        std::vector<size_t> new_run_cursor(F);
+        std::vector<size_t> new_intra_cursor(F);
+
+        #pragma omp parallel for schedule(dynamic) num_threads(threads)
+        for (size_t f = 0; f < F; ++f) {
+            const auto& runs_f = store.runs(static_cast<int>(f));
+            size_t run_cursor = file_run_cursor[f];
+            size_t intra      = file_intra_cursor[f];
+
+            for (size_t bi = 0; bi < M; ++bi) {
+                batch_start_run[bi][f]   = run_cursor;
+                batch_start_intra[bi][f] = static_cast<uint32_t>(intra);
+
+                size_t to_advance = request[bi][f];
+                while (to_advance > 0) {
+                    if (run_cursor >= runs_f.size()) {
+                        #pragma omp critical
+                        {
+                            std::cerr << "[in-memory] WARNING: advancing past end of "
+                                      << "file " << f << " at chunk " << chunk_idx
+                                      << " batch " << (batch_lo + bi) << " ("
+                                      << to_advance << " tags requested)"
+                                      << std::endl;
+                        }
+                        break;
+                    }
+                    const size_t left = static_cast<size_t>(runs_f[run_cursor].second) - intra;
+                    if (to_advance >= left) {
+                        to_advance -= left;
+                        run_cursor++;
+                        intra = 0;
+                    } else {
+                        intra += to_advance;
+                        to_advance = 0;
+                    }
+                }
+            }
+            new_run_cursor[f]   = run_cursor;
+            new_intra_cursor[f] = intra;
+        }
+
+        // request[] is no longer needed within this chunk.
+        std::vector<std::vector<size_t>>().swap(request);
+
+        tot_co += std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - t_co).count();
+
+        // ---------------------------- Phase 2 + 3 ----------------------------
+        // Each batch builds its own run-length-encoded buffer from RAM. No
+        // locks, no waiting -- the per-file cursors are independent across
+        // batches because the coordinator already partitioned each file's tag
+        // stream by batch.
+        auto t_p2 = std::chrono::high_resolution_clock::now();
+
+        std::vector<std::vector<std::pair<pos_t, uint16_t>>> results(M);
+
+        #pragma omp parallel for schedule(dynamic) num_threads(threads)
+        for (size_t bi = 0; bi < M; ++bi) {
+            const size_t total_pos = small_file_ids ? itf8[bi].size() : itf16[bi].size();
+            if (total_pos == 0) continue;
+
+            std::vector<size_t> run_idx(F);
+            std::vector<size_t> intra(F);
+            for (size_t f = 0; f < F; ++f) {
+                run_idx[f] = batch_start_run[bi][f];
+                intra[f]   = batch_start_intra[bi][f];
+            }
+
+            auto& out_buf = results[bi];
+            out_buf.reserve(total_pos / 8 + 16);
+
+            pos_t cur{};
+            uint16_t cur_len = 0;
+            bool first = true;
+
+            auto consume_one = [&](size_t f) -> pos_t {
+                const auto& runs_f = store.runs(static_cast<int>(f));
+                const pos_t t = runs_f[run_idx[f]].first;
+                intra[f]++;
+                if (intra[f] >= runs_f[run_idx[f]].second) {
+                    run_idx[f]++;
+                    intra[f] = 0;
+                }
+                return t;
+            };
+
+            auto step = [&](size_t f) {
+                const pos_t t = consume_one(f);
+                if (first) {
+                    cur = t;
+                    cur_len = 1;
+                    first = false;
+                } else if (t == cur) {
+                    if (cur_len == std::numeric_limits<uint16_t>::max()) {
+                        out_buf.emplace_back(cur, cur_len);
+                        cur_len = 0;
+                    }
+                    cur_len++;
+                } else {
+                    out_buf.emplace_back(cur, cur_len);
+                    cur = t;
+                    cur_len = 1;
+                }
+            };
+
+            if (small_file_ids) {
+                const auto& itf = itf8[bi];
+                for (size_t i = 0; i < itf.size(); ++i) step(static_cast<size_t>(itf[i]));
+            } else {
+                const auto& itf = itf16[bi];
+                for (size_t i = 0; i < itf.size(); ++i) step(static_cast<size_t>(itf[i]));
+            }
+            if (!first) out_buf.emplace_back(cur, cur_len);
+
+            // Free this batch's metadata immediately.
+            if (small_file_ids) std::vector<uint8_t>().swap(itf8[bi]);
+            else                std::vector<uint16_t>().swap(itf16[bi]);
+            std::vector<size_t>().swap(batch_start_run[bi]);
+            std::vector<uint32_t>().swap(batch_start_intra[bi]);
+        }
+
+        tot_p2 += std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - t_p2).count();
+
+        // ------------------------------- Writer ------------------------------
+        // Sequential, in batch-ID order within this chunk. previous_last_run
+        // is the caller's reference; it carries from chunk to chunk and back
+        // to main() so the boundary merge logic works across the whole run.
+        auto t_w = std::chrono::high_resolution_clock::now();
+
+        for (size_t bi = 0; bi < M; ++bi) {
+            const size_t b = batch_lo + bi;
+            auto& current_tags = results[bi];
+            if (current_tags.empty()) {
+                std::cerr << "No tags extracted for batch " << b << std::endl;
+                continue;
+            }
+
+            if (current_tags.front().first == previous_last_run.first) {
+                current_tags.front().second += previous_last_run.second;
+            } else {
+                tag_array.append_compact_run_streamed(
+                        previous_last_run.first, previous_last_run.second,
+                        out_encoded_starts, out_bwt_intervals);
+            }
+
+            // Pop & carry the tail run, unless this is the absolute last
+            // batch of the entire run (mirrors the streaming-path writer).
+            if (b + 1 < num_batches) {
+                previous_last_run = current_tags.back();
+                current_tags.pop_back();
+            }
+
+            tag_run_count += current_tags.size();
+            for (auto& p : current_tags) {
+                tag_array.append_compact_run_streamed(
+                        p.first, p.second, out_encoded_starts, out_bwt_intervals);
+            }
+            std::vector<std::pair<pos_t, uint16_t>>().swap(current_tags);
+        }
+
+        tot_w += std::chrono::duration<double>(
+                std::chrono::high_resolution_clock::now() - t_w).count();
+
+        // Carry per-file cursors forward to the next chunk.
+        file_run_cursor   = std::move(new_run_cursor);
+        file_intra_cursor = std::move(new_intra_cursor);
+    }
+
+    std::cerr << "[in-memory] Totals: Phase 1=" << tot_p1
+              << "s, Coordinator=" << tot_co
+              << "s, Phase 2+3=" << tot_p2
+              << "s, Writer=" << tot_w << "s" << std::endl;
+}
+
+
 std::vector <std::string> get_files_in_dir(const std::string &directoryPath) {
     std::vector <std::string> files;
     if (!fs::is_directory(directoryPath)) {
@@ -428,8 +905,39 @@ std::vector <std::string> get_files_in_dir(const std::string &directoryPath) {
 
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        std::cerr << "usage: ... " << std::endl;
+    // Parse positional args + the --in-memory flag (can appear anywhere).
+    // --in-memory swaps the streaming FileReader for an InMemoryTagStore and
+    // runs the parallel in-memory pipeline. Faster but uses much more RAM
+    // because every tag file is fully decoded into RAM up front.
+    bool in_memory = false;
+    // 0 means "let the pipeline pick a default" (currently 16384 batches/chunk).
+    // Tune this when in-memory mode OOMs; lower = less transient RAM, slightly
+    // more chunk-overhead per pass.
+    size_t in_memory_chunk_size = 0;
+    std::vector<std::string> pos_args;
+    pos_args.reserve(argc);
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--in-memory" || a == "--in-ram") {
+            in_memory = true;
+        } else if (a == "--chunk" || a == "--chunk-size") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: " << a << " requires a value" << std::endl;
+                exit(1);
+            }
+            try {
+                in_memory_chunk_size = std::stoull(argv[++i]);
+            } catch (...) {
+                std::cerr << "Error: invalid chunk size '" << argv[i] << "'" << std::endl;
+                exit(1);
+            }
+        } else {
+            pos_args.push_back(std::move(a));
+        }
+    }
+    if (pos_args.size() != 3) {
+        std::cerr << "usage: merge_tags [--in-memory] [--chunk N] "
+                     "<gbz_graph> <r_index> <tag_array_dir>" << std::endl;
         exit(0);
     }
 
@@ -441,9 +949,12 @@ int main(int argc, char **argv) {
     int threads = omp_get_max_threads();
     omp_set_num_threads(threads);
 
-    std::string gbz_graph = std::string(argv[1]);
-    std::string r_index_file = std::string(argv[2]);
-    std::string tag_array_index_dir = std::string(argv[3]);
+    std::string gbz_graph = pos_args[0];
+    std::string r_index_file = pos_args[1];
+    std::string tag_array_index_dir = pos_args[2];
+
+    std::cerr << "Mode: " << (in_memory ? "in-memory (fast, RAM-heavy)"
+                                        : "streaming (default)") << std::endl;
 
 
     GBZ gbz;
@@ -482,13 +993,32 @@ int main(int argc, char **argv) {
     std::vector<int> comp_to_file(number_of_file);
 
     std::cerr << "Initializing the reader" << std::endl;
-    FileReader reader(files, threads, 50000000);
+    // Only one of these is non-null depending on `in_memory`. We dispatch the
+    // small number of reader calls in shared setup through lambdas so the rest
+    // of main() doesn't have to care which one is active.
+    std::unique_ptr<FileReader>         stream_reader;
+    std::unique_ptr<InMemoryTagStore>   mem_reader;
+    if (in_memory) {
+        mem_reader = std::make_unique<InMemoryTagStore>(files);
+    } else {
+        stream_reader = std::make_unique<FileReader>(files, threads, 50000000);
+    }
+    auto reader_get_first_tag = [&](int f) -> pos_t {
+        return in_memory ? mem_reader->get_first_tag(f)
+                         : stream_reader->get_first_tag(f);
+    };
+    auto reader_get_next_tag = [&](int f) -> pos_t {
+        return in_memory ? mem_reader->get_next_tag(f)
+                         : stream_reader->get_next_tag(f);
+    };
+
     std::cerr << "Creating the mapping from comp to tag files" << std::endl;
     // for each tag block files, we read the first block and read the first node
     for (auto i = 0; i < number_of_file; i++) {
         // get the component of the node of the first block
-        size_t comp = node_to_comp_map[id(reader.get_first_tag(i))];
-        std::cerr << "The component of the first block of file" << files[i] << " is " << comp << " first tag " << reader.get_first_tag(i)  << " node id is " << id(reader.get_first_tag(i)) << std::endl;
+        pos_t first_tag = reader_get_first_tag(i);
+        size_t comp = node_to_comp_map[id(first_tag)];
+        std::cerr << "The component of the first block of file" << files[i] << " is " << comp << " first tag " << first_tag  << " node id is " << id(first_tag) << std::endl;
         file_to_comp[i] = comp;
         comp_to_file[comp] = i;
 
@@ -676,7 +1206,7 @@ int main(int argc, char **argv) {
         // want to get the file number that is associated with the seq id
         auto current_file = comp_to_file[seq_id_to_comp_id[seq_id]];
 
-        auto temp_tag = reader.get_next_tag(current_file);
+        auto temp_tag = reader_get_next_tag(current_file);
 
         if (temp_tag_runs.back().first == temp_tag){
             temp_tag_runs.back().second += 1;
@@ -751,8 +1281,18 @@ int main(int argc, char **argv) {
     std::cerr << "Total bwt indexes to find tags for is " << r_index.get_sequence_size() << std::endl;
     std::cerr << "We will handle " << r_index.tot_runs() << " runs" << std::endl;
     cerr << "Merging tags and creating the whole genome tag array indexing" << endl;
+
+    if (in_memory) {
+        // Fast RAM-heavy path: parallel locateNext walks + per-file
+        // coordinator prefix sum + parallel RLE buffer builds + serial writer.
+        merge_in_memory_pipeline(r_index, *mem_reader, comp_to_file, seq_id_to_comp_id,
+                                 tag_array, out_encoded_starts, out_bwt_intervals,
+                                 previous_last_run, tag_run_count,
+                                 starting_run, run_per_thread, threads,
+                                 in_memory_chunk_size);
+    } else {
     for (size_t to_read = 0; to_read < threads && starting_run < r_index.tot_runs(); to_read++) {
-        threads_list.emplace_back(extract_tags_batch, std::ref(r_index), std::ref(reader), to_read,
+        threads_list.emplace_back(extract_tags_batch, std::ref(r_index), std::ref(*stream_reader), to_read,
                                   comp_to_file, seq_id_to_comp_id,
                                   std::ref(thread_buffers[to_read]), starting_run, run_per_thread);
         starting_run += run_per_thread;
@@ -774,7 +1314,7 @@ int main(int argc, char **argv) {
         current_tags.swap(thread_buffers[thread_id]);
 
         if (to_write + threads < number_of_jobs) {
-            threads_list[thread_id] = std::thread(extract_tags_batch, std::ref(r_index), std::ref(reader), thread_id,
+            threads_list[thread_id] = std::thread(extract_tags_batch, std::ref(r_index), std::ref(*stream_reader), thread_id,
                                                   comp_to_file, seq_id_to_comp_id,
                                                   std::ref(thread_buffers[thread_id]), starting_run, run_per_thread);
             starting_run += run_per_thread;
@@ -832,7 +1372,9 @@ int main(int argc, char **argv) {
 
 
     }
+    } // end of `if (in_memory) ... else { ...streaming worker pool... }`
     // When there are no jobs, the main thread's last run was popped into previous_last_run and never written.
+    // (Applies to both modes; in in-memory mode threads_list is empty so the join loop is a no-op.)
     if (number_of_jobs == 0) {
         tag_array.append_compact_run_streamed(previous_last_run.first, previous_last_run.second, out_encoded_starts, out_bwt_intervals);
     }

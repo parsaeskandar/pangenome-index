@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
             std::cerr << "Error: Cannot open r-index file: " << index_file << std::endl;
             return 1;
         }
-        idx.load(ri_in);
+        idx.load_encoded(ri_in);
     } else {
         std::cerr << "Building r-index from grlBWT file " << index_file << std::endl;
         idx = FastLocate(index_file);

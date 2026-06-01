@@ -1,12 +1,15 @@
 #include "pangenome_index/r-index.hpp"
 #include "pangenome_index/sampled_tag_array.hpp"
 #include "pangenome_index/translation_tables.hpp"
+#include "pangenome_index/surject_anchor_builder.hpp"
 #include <sdsl/wavelet_trees.hpp>
 #include <sdsl/simple_sds.hpp>
 #include <gbwt/gbwt.h>
 #include <gbwt/fast_locate.h>
 #include <gbwtgraph/gbwtgraph.h>
 #include <gbwtgraph/gbz.h>
+#include <handlegraph/util.hpp>
+#include <cctype>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -352,6 +355,328 @@ Index::translate(const std::string& src_haplotype,
         results.push_back(ti);
     }
     return results;
+}
+
+// ── GAF parsing helpers ──────────────────────────────────────────────────
+
+namespace {
+
+/// Tab-split helper that preserves empty fields.
+std::vector<std::string> split_tabs_strict(const std::string& s) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == '\t') {
+            out.push_back(s.substr(start, i - start));
+            start = i + 1;
+        }
+    }
+    return out;
+}
+
+/// Parse the GAF path field (e.g. ">1>2<3>4") into (node_id, is_reverse) pairs.
+/// Throws on malformed input. Returns empty vector for "*" (missing path).
+std::vector<std::pair<int64_t, bool>>
+parse_gaf_path_field(const std::string& path_str) {
+    std::vector<std::pair<int64_t, bool>> result;
+    if (path_str == "*" || path_str.empty()) return result;
+    size_t i = 0;
+    while (i < path_str.size()) {
+        char c = path_str[i];
+        if (c != '>' && c != '<') {
+            // Stable-path form ("chr1:100-200" etc.) — not what giraffe emits.
+            // Return empty so caller falls back to "no nodes" handling.
+            return {};
+        }
+        bool is_rev = (c == '<');
+        ++i;
+        size_t j = i;
+        while (j < path_str.size() &&
+               path_str[j] != '>' && path_str[j] != '<') {
+            ++j;
+        }
+        if (j == i) {
+            throw std::runtime_error("Empty node id in GAF path: " + path_str);
+        }
+        std::string token = path_str.substr(i, j - i);
+        // Reject stable-path step format ("name:start-end") — we only handle
+        // segment IDs (positive integers) at this layer.
+        if (token.find(':') != std::string::npos) return {};
+        int64_t nid = std::stoll(token);
+        result.emplace_back(nid, is_rev);
+        i = j;
+    }
+    return result;
+}
+
+/// Parse a cg:Z: CIGAR string ("5M2D3I4M") into (op, len) pairs.
+std::vector<std::pair<char, size_t>> parse_cg_cigar(const std::string& cg) {
+    std::vector<std::pair<char, size_t>> ops;
+    size_t i = 0;
+    while (i < cg.size()) {
+        size_t j = i;
+        while (j < cg.size() && std::isdigit(static_cast<unsigned char>(cg[j]))) ++j;
+        if (j == i || j >= cg.size()) break;
+        size_t len = std::stoull(cg.substr(i, j - i));
+        char op = cg[j];
+        ops.emplace_back(op, len);
+        i = j + 1;
+    }
+    return ops;
+}
+
+/// Convert a GAF line into per-node SourceMappings using the path field
+/// and (preferred) the cg:Z: CIGAR. Falls back to proportional distribution
+/// of the query interval across node lengths when CIGAR is missing.
+///
+/// On any parse failure returns an empty vector; caller can detect this and
+/// return status="parse_error".
+std::vector<panindexer::SourceMapping>
+gaf_to_source_mappings(const std::string& gaf_str,
+                       const gbwtgraph::GBWTGraph& graph) {
+    auto fields = split_tabs_strict(gaf_str);
+    if (fields.size() < 12) return {};
+
+    // Required numeric fields (return empty on malformed input).
+    size_t query_start, query_end, path_start, path_end_field;
+    try {
+        query_start     = std::stoull(fields[2]);
+        query_end       = std::stoull(fields[3]);
+        path_start      = std::stoull(fields[7]);
+        path_end_field  = std::stoull(fields[8]);
+    } catch (const std::exception&) {
+        return {};
+    }
+    (void) query_end;
+    (void) path_end_field;
+
+    const std::string& path_str = fields[5];
+    std::vector<std::pair<int64_t, bool>> path_nodes;
+    try {
+        path_nodes = parse_gaf_path_field(path_str);
+    } catch (const std::exception&) {
+        return {};
+    }
+    if (path_nodes.empty()) return {};
+
+    // Look up node lengths in the graph (returns 0 if node is missing).
+    std::vector<size_t> node_lengths;
+    node_lengths.reserve(path_nodes.size());
+    for (const auto& [nid, is_rev] : path_nodes) {
+        if (!graph.has_node(static_cast<handlegraph::nid_t>(nid))) {
+            return {};
+        }
+        auto handle = graph.get_handle(
+            static_cast<handlegraph::nid_t>(nid), is_rev);
+        node_lengths.push_back(graph.get_length(handle));
+    }
+
+    // Find cg:Z: CIGAR among optional fields.
+    std::string cg_str;
+    for (size_t k = 12; k < fields.size(); ++k) {
+        if (fields[k].size() > 5 && fields[k].compare(0, 5, "cg:Z:") == 0) {
+            cg_str = fields[k].substr(5);
+            break;
+        }
+    }
+
+    std::vector<panindexer::SourceMapping> result;
+    result.reserve(path_nodes.size());
+
+    if (!cg_str.empty()) {
+        // ── CIGAR-driven walk ─────────────────────────────────────────────
+        auto cigar_ops = parse_cg_cigar(cg_str);
+
+        size_t query_pos = query_start;
+        size_t path_pos  = path_start;            // absolute path position
+        size_t cigar_i   = 0;
+        size_t cigar_rem = cigar_ops.empty() ? 0 : cigar_ops[0].second;
+        size_t path_node_start = 0;               // path offset at start of current node
+
+        for (size_t ni = 0; ni < path_nodes.size(); ++ni) {
+            const auto& [nid, is_rev] = path_nodes[ni];
+            size_t nlen = node_lengths[ni];
+            size_t path_node_end = path_node_start + nlen;
+
+            // Skip nodes the alignment hasn't reached yet (rare with proper GAF).
+            if (path_node_end <= path_pos) {
+                path_node_start = path_node_end;
+                continue;
+            }
+
+            size_t node_offset = (path_pos >= path_node_start)
+                                 ? (path_pos - path_node_start) : 0;
+            size_t read_begin = query_pos;
+            size_t path_at_node_start = path_pos;
+
+            // Walk CIGAR until we exhaust this node or run out of ops.
+            while (path_pos < path_node_end && cigar_i < cigar_ops.size()) {
+                char op = cigar_ops[cigar_i].first;
+                bool consumes_path  = (op == 'M' || op == '=' || op == 'X'
+                                       || op == 'D' || op == 'N');
+                bool consumes_query = (op == 'M' || op == '=' || op == 'X'
+                                       || op == 'I' || op == 'S');
+
+                size_t steps;
+                if (consumes_path) {
+                    size_t path_left_in_node = path_node_end - path_pos;
+                    steps = std::min(cigar_rem, path_left_in_node);
+                } else {
+                    // I / S / H / P — consume the rest of the op without
+                    // advancing path. Attribute to this node.
+                    steps = cigar_rem;
+                }
+
+                if (consumes_path)  path_pos  += steps;
+                if (consumes_query) query_pos += steps;
+
+                cigar_rem -= steps;
+                if (cigar_rem == 0) {
+                    ++cigar_i;
+                    if (cigar_i < cigar_ops.size()) {
+                        cigar_rem = cigar_ops[cigar_i].second;
+                    }
+                }
+            }
+
+            panindexer::SourceMapping sm;
+            sm.node_id = nid;
+            sm.is_reverse = is_rev;
+            sm.read_begin_offset = read_begin;
+            sm.read_end_offset = query_pos;
+            sm.node_offset_in_node = node_offset;
+            sm.mapping_from_length = path_pos - path_at_node_start;
+            result.push_back(sm);
+
+            path_node_start = path_node_end;
+        }
+    } else {
+        // ── No CIGAR: distribute the query range proportionally to path coverage.
+        size_t path_node_start = 0;
+        size_t total_path_len = 0;
+        for (size_t l : node_lengths) total_path_len += l;
+        if (path_end_field == 0) path_end_field = total_path_len;
+        size_t covered_total = (path_end_field > path_start)
+                               ? (path_end_field - path_start) : 0;
+        size_t query_total = (query_end > query_start)
+                             ? (query_end - query_start) : 0;
+
+        for (size_t ni = 0; ni < path_nodes.size(); ++ni) {
+            const auto& [nid, is_rev] = path_nodes[ni];
+            size_t nlen = node_lengths[ni];
+            size_t node_end = path_node_start + nlen;
+
+            if (node_end <= path_start || path_node_start >= path_end_field) {
+                path_node_start = node_end;
+                continue;
+            }
+            size_t cov_start = std::max(path_node_start, path_start);
+            size_t cov_end   = std::min(node_end, path_end_field);
+            size_t cov_len   = cov_end - cov_start;
+
+            size_t read_b, read_e;
+            if (covered_total > 0) {
+                read_b = query_start + (cov_start - path_start) * query_total / covered_total;
+                read_e = query_start + (cov_end   - path_start) * query_total / covered_total;
+            } else {
+                read_b = query_start;
+                read_e = query_start;
+            }
+
+            panindexer::SourceMapping sm;
+            sm.node_id = nid;
+            sm.is_reverse = is_rev;
+            sm.read_begin_offset = read_b;
+            sm.read_end_offset = read_e;
+            sm.node_offset_in_node = cov_start - path_node_start;
+            sm.mapping_from_length = cov_len;
+            result.push_back(sm);
+
+            path_node_start = node_end;
+        }
+    }
+
+    return result;
+}
+
+/// Translate panindexer::PrecomputedAnchor records into the portable
+/// AnchorRecord struct used at the Python boundary.
+AnchorRecord to_anchor_record(const panindexer::PrecomputedAnchor& a) {
+    AnchorRecord r;
+    r.source_mapping_begin = a.source_mapping_begin;
+    r.source_mapping_end   = a.source_mapping_end;
+    r.read_begin_offset    = a.read_begin_offset;
+    r.read_end_offset      = a.read_end_offset;
+    r.path_offset_step_begin = a.path_offset_step_begin;
+    r.path_offset_step_end   = a.path_offset_step_end;
+    r.gbwt_edge_begin_node   = a.gbwt_edge_begin.first;
+    r.gbwt_edge_begin_offset = a.gbwt_edge_begin.second;
+    r.gbwt_edge_end_node     = a.gbwt_edge_end.first;
+    r.gbwt_edge_end_offset   = a.gbwt_edge_end.second;
+    return r;
+}
+
+const char* status_token(panindexer::AnchorBuildResult::Status s) {
+    using S = panindexer::AnchorBuildResult::Status;
+    switch (s) {
+        case S::Ok:             return "ok";
+        case S::EmptyAlignment: return "empty_alignment";
+        case S::UnknownPath:    return "unknown_path";
+        case S::NoCommonNodes:  return "no_common_nodes";
+    }
+    return "unknown";
+}
+
+} // anonymous namespace
+
+AnchorBuildPyResult Index::build_surject_anchors(
+    const std::string& gaf_str,
+    const std::string& target_haplotype) const
+{
+    AnchorBuildPyResult out;
+
+    if (!loaded_) {
+        throw std::runtime_error("Index::build_surject_anchors called before load()");
+    }
+
+    auto source_mappings = gaf_to_source_mappings(gaf_str, gbz_->graph);
+    if (source_mappings.empty()) {
+        // Differentiate "couldn't parse anything" vs "alignment is empty":
+        // peek at the GAF query name to choose. Either way we report empty.
+        out.status = "parse_error";
+        return out;
+    }
+
+    FastLocate& rindex = const_cast<FastLocate&>(rlbwt_rindex_);
+    SampledTagArray& sampled = const_cast<SampledTagArray&>(sampled_);
+
+    std::vector<panindexer::AnchorBuildResult> results =
+        panindexer::build_surject_anchors(
+            *gbz_, rindex, sampled, *gbwt_rindex_,
+            table1_, source_mappings, target_haplotype);
+
+    if (results.empty()) {
+        out.status = "unknown_path";
+        return out;
+    }
+
+    // Pick the subpath result with the most anchors. If none have anchors,
+    // fall back to the first (so status/target_path_length get reported).
+    const panindexer::AnchorBuildResult* best = &results.front();
+    for (const auto& r : results) {
+        if (r.anchors.size() > best->anchors.size()) {
+            best = &r;
+        }
+    }
+
+    out.status = status_token(best->status);
+    out.target_path_length = best->target_path_length;
+    out.target_rev_strand = best->target_rev_strand;
+    out.anchors.reserve(best->anchors.size());
+    for (const auto& a : best->anchors) {
+        out.anchors.push_back(to_anchor_record(a));
+    }
+    return out;
 }
 
 std::vector<std::string> Index::get_haplotype_names() const {

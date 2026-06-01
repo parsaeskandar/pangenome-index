@@ -81,7 +81,7 @@ HEADERS=$(wildcard ../include/pangenome_index/*.hpp)
 #LIBOBJS=$(addprefix $(BUILD_OBJ)/,tag_arrays.o r-index.o)
 #LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
-PROGRAMS=test_rindex test_bplus_tree benchmark_query_tags
+PROGRAMS=test_rindex test_bplus_tree benchmark_query_tags test_surject_anchor_builder
 
 LIBRARY=../lib/libpanindexer.a
 
@@ -96,6 +96,16 @@ directories: $(BUILD_BIN) $(BUILD_LIB) $(BUILD_OBJ)
 
 $(PROGRAMS):%:%.o $(LIBRARY)
 	$(MY_CXX) $(CXX_FLAGS) -o $@ $< $(LIBRARY) $(LIBS)
+
+# test_surject_anchor_builder additionally needs find_sequences_for_tag,
+# which lives in coordinate_translation.cpp (and isn't in libpanindexer.a
+# because that file has its own main()). Build a no-main variant just for
+# this test and override the link rule to include it.
+coordinate_translation_nomain.o: ../src/coordinate_translation.cpp $(HEADERS)
+	$(MY_CXX) $(CXX_FLAGS) -DCOORDINATE_TRANSLATION_NO_MAIN -c $< -o $@
+
+test_surject_anchor_builder: test_surject_anchor_builder.o coordinate_translation_nomain.o $(LIBRARY)
+	$(MY_CXX) $(CXX_FLAGS) -o $@ test_surject_anchor_builder.o coordinate_translation_nomain.o $(LIBRARY) $(LIBS)
 
 
 test: $(PROGRAMS)

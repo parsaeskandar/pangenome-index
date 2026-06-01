@@ -79,6 +79,17 @@ public:
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;
 
+    /// Build surjection anchors from a graph GAF alignment against the named
+    /// target haplotype. Parses the GAF path + CIGAR into per-node source
+    /// mappings, then runs panindexer::build_surject_anchors.
+    ///
+    /// Returns one AnchorBuildPyResult; if the haplotype maps to multiple
+    /// subpaths, the result with the longest non-empty anchor list wins.
+    /// status is one of: "ok", "empty_alignment", "unknown_path",
+    /// "no_common_nodes", "parse_error".
+    AnchorBuildPyResult build_surject_anchors(const std::string& gaf_str,
+                                              const std::string& target_haplotype) const;
+
 private:
     bool loaded_ = false;
 
