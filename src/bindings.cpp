@@ -56,10 +56,18 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def_readwrite("anchors",            &AnchorBuildPyResult::anchors)
         .def_readwrite("target_path_length", &AnchorBuildPyResult::target_path_length)
         .def_readwrite("target_rev_strand",  &AnchorBuildPyResult::target_rev_strand)
+        // find_sequences_for_tag LF-cost diagnostics (see AnchorBuildPyResult).
+        .def_readwrite("find_seq_calls",     &AnchorBuildPyResult::find_seq_calls)
+        .def_readwrite("find_seq_runs",      &AnchorBuildPyResult::find_seq_runs)
+        .def_readwrite("find_seq_lf_steps",  &AnchorBuildPyResult::find_seq_lf_steps)
+        .def_readwrite("find_seq_visits",    &AnchorBuildPyResult::find_seq_visits)
+        .def_readwrite("last_run_nav_steps", &AnchorBuildPyResult::last_run_nav_steps)
+        .def_readwrite("last_run_length",    &AnchorBuildPyResult::last_run_length)
         .def("__repr__", [](const AnchorBuildPyResult& r) {
             return "<AnchorBuildResult status='" + r.status +
                    "' n_anchors=" + std::to_string(r.anchors.size()) +
-                   " target_path_length=" + std::to_string(r.target_path_length) + ">";
+                   " target_path_length=" + std::to_string(r.target_path_length) +
+                   " find_seq_lf_steps=" + std::to_string(r.find_seq_lf_steps) + ">";
         });
 
     py::class_<Index>(m, "Index")

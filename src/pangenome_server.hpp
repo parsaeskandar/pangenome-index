@@ -48,6 +48,21 @@ struct AnchorBuildPyResult {
     std::vector<AnchorRecord> anchors;
     uint64_t target_path_length = 0;
     bool target_rev_strand = false;
+
+    /// Diagnostics for the dominant cost: find_sequences_for_tag's RLBWT
+    /// enumeration. Measured over the whole build (all subpath attempts).
+    ///   find_seq_calls       — number of find_sequences_for_tag invocations
+    ///   find_seq_runs        — total tag runs ("vectors") iterated
+    ///   find_seq_lf_steps    — total locateNext (LF) calls (navigation + walk)
+    ///   find_seq_visits      — total node visits enumerated (node's pangenome usage)
+    ///   last_run_nav_steps   — LF steps to navigate to the LAST run's start
+    ///   last_run_length      — number of positions in the LAST run iterated
+    uint64_t find_seq_calls = 0;
+    uint64_t find_seq_runs = 0;
+    uint64_t find_seq_lf_steps = 0;
+    uint64_t find_seq_visits = 0;
+    uint64_t last_run_nav_steps = 0;
+    uint64_t last_run_length = 0;
 };
 
 class Index {

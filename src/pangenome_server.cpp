@@ -80,6 +80,20 @@ struct CommonNodes {
     bool found;
 };
 
+// Mirror of coordinate_translation.cpp's file-scope FindSeqStats (kept in sync
+// by hand, per the extern-struct convention used for the structs above). The
+// thread-local accumulator there records find_sequences_for_tag's LF cost;
+// we reset it before a build and read it after to report per-query diagnostics.
+struct FindSeqStats {
+    size_t calls = 0;
+    size_t runs = 0;
+    size_t lf_steps = 0;
+    size_t visits = 0;
+    size_t last_run_nav_steps = 0;
+    size_t last_run_length = 0;
+};
+extern thread_local FindSeqStats g_find_seq_stats;
+
 // ── Extern declarations for functions defined in coordinate_translation.cpp ─
 
 extern std::vector<TagInfo> find_tags_in_interval(
@@ -732,6 +746,10 @@ AnchorBuildPyResult Index::build_surject_anchors(
         return out;
     }
 
+    // Reset the find_sequences_for_tag LF accumulator so the diagnostics below
+    // reflect only this query (all subpath attempts).
+    g_find_seq_stats = FindSeqStats{};
+
     std::vector<panindexer::AnchorBuildResult> results;
     results.reserve(target_path_ids.size());
     for (const auto& [pid, plen] : target_path_ids) {
@@ -760,6 +778,14 @@ AnchorBuildPyResult Index::build_surject_anchors(
     for (const auto& a : best->anchors) {
         out.anchors.push_back(to_anchor_record(a));
     }
+
+    // Report the find_sequences_for_tag LF cost accumulated over this query.
+    out.find_seq_calls     = g_find_seq_stats.calls;
+    out.find_seq_runs      = g_find_seq_stats.runs;
+    out.find_seq_lf_steps  = g_find_seq_stats.lf_steps;
+    out.find_seq_visits    = g_find_seq_stats.visits;
+    out.last_run_nav_steps = g_find_seq_stats.last_run_nav_steps;
+    out.last_run_length    = g_find_seq_stats.last_run_length;
     return out;
 }
 

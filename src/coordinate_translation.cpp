@@ -54,6 +54,22 @@ struct NodeVisit {
     uint64_t tag_code;          // Tag code for this node
 };
 
+// Diagnostics for find_sequences_for_tag's LF cost, accumulated across calls
+// in a thread-local so callers (e.g. the anchor builder) can measure how much
+// of a query is spent enumerating a node's pangenome-wide visits. Reset to {}
+// before a measured region and read afterwards. Defined identically (file
+// scope) in surject_anchor_builder.cpp / pangenome_server.cpp per this file's
+// existing extern-struct convention (NodeVisit, TagInfo, …).
+struct FindSeqStats {
+    size_t calls = 0;             // find_sequences_for_tag invocations
+    size_t runs = 0;              // total tag runs ("vectors") iterated
+    size_t lf_steps = 0;          // total locateNext (LF) calls — navigation + run walk
+    size_t visits = 0;            // total NodeVisit entries produced (node's pangenome usage)
+    size_t last_run_nav_steps = 0;// LF steps to navigate from the sample to the LAST run's start
+    size_t last_run_length = 0;   // number of positions in the LAST run iterated
+};
+thread_local FindSeqStats g_find_seq_stats;
+
 // Structure for coordinate translation result
 struct TranslationResult {
     size_t source_offset;       // Offset on source haplotype
@@ -992,11 +1008,13 @@ vector<TagInfo> find_tags_in_interval(FastLocate& r_index, SampledTagArray& samp
 vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& sampled,
                                           uint64_t tag_code) {
     vector<NodeVisit> visits;
-    
+
+    g_find_seq_stats.calls++;   // diagnostics (see FindSeqStats)
+
     if (debug) {
         cerr << "[find_sequences_for_tag] Searching for tag_code=" << tag_code << endl;
     }
-    
+
     const auto& wm = sampled.values();
     size_t total_occ = wm.rank(wm.size(), tag_code);
     
@@ -1062,6 +1080,7 @@ vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& s
         
         // Get initial packed position
         size_t packed_pos;
+        size_t stats_nav_steps = 0;   // LF steps to navigate to this run's start (diagnostics)
         {
             size_t rindex_run_id = 0;
             size_t run_start_pos = 0;
@@ -1086,8 +1105,9 @@ vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& s
             
             // Navigate from run start to locate_start
             size_t nav_steps = locate_start - run_start_pos;
+            stats_nav_steps = nav_steps;   // diagnostics
             if (debug) {
-                cerr << "      Need to navigate " << nav_steps << " steps from run_start_pos=" 
+                cerr << "      Need to navigate " << nav_steps << " steps from run_start_pos="
                      << run_start_pos << " to locate_start=" << locate_start << endl;
             }
             
@@ -1162,7 +1182,20 @@ vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& s
             visits.push_back(visit);
             // std::cerr << "done finding sequences for tag" << endl;
         }
-        
+
+        // Diagnostics: LF cost of this run = navigation (sample → run start) +
+        // run walk (one locateNext per position after the first). The "last
+        // run" fields end up holding the values for the final run iterated.
+        {
+            const size_t run_len = locate_end - locate_start + 1;
+            const size_t walk_steps = locate_end - locate_start;  // locateNext calls in the walk
+            g_find_seq_stats.runs++;
+            g_find_seq_stats.lf_steps += stats_nav_steps + walk_steps;
+            g_find_seq_stats.visits += run_len;
+            g_find_seq_stats.last_run_nav_steps = stats_nav_steps;
+            g_find_seq_stats.last_run_length = run_len;
+        }
+
         if (debug) {
             cerr << "    Finished occurrence " << j << ", total visits so far: " << visits.size() << endl;
         }

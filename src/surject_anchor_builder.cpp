@@ -317,6 +317,146 @@ std::vector<std::string> path_names_for_haplotype_local(
     return result;
 }
 
+// ── Reverse-strand support ──────────────────────────────────────────────────
+
+/// Cheap probe: does the target's forward sequence (target_seq_id_fwd) visit
+/// `node_id` in the given orientation? Uses only the GBWT decompressSA (the
+/// same cheap gate locate_target_visit uses); no RLBWT work.
+bool target_visits_node(const gbwt::FastLocate& gbwt_fast_locate,
+                        int64_t node_id, bool is_reverse,
+                        size_t target_seq_id_fwd) {
+    gbwt::node_type node = gbwt::Node::encode(node_id, is_reverse);
+    std::vector<gbwt::size_type> sa_values = gbwt_fast_locate.decompressSA(node);
+    for (gbwt::size_type sa : sa_values) {
+        if (gbwt_fast_locate.seqId(sa) == target_seq_id_fwd) return true;
+    }
+    return false;
+}
+
+/// Determine which strand of the read aligns to the target, from the first
+/// source mapping the target visits in EITHER orientation:
+///   - returns 0 (forward): target visits the node in the read's orientation,
+///   - returns 1 (reverse): target visits the node in the FLIPPED orientation
+///     (the read is the reverse complement of this target region),
+///   - returns -1: no source node is on the target in either orientation.
+/// Probing both orientations per candidate stops at the first shared node, so
+/// a reverse-strand read is detected in O(1) probes instead of scanning all
+/// mappings in the wrong orientation (which is what made revcomp reads slow).
+/// For a colinear read sampled from the target this hits the very first mapping.
+int detect_strand(const gbwt::FastLocate& gbwt_fast_locate,
+                  const std::vector<SourceMapping>& mappings,
+                  size_t target_seq_id_fwd) {
+    for (const SourceMapping& m : mappings) {
+        if (target_visits_node(gbwt_fast_locate, m.node_id, m.is_reverse, target_seq_id_fwd)) {
+            return 0;  // forward strand
+        }
+        if (target_visits_node(gbwt_fast_locate, m.node_id, !m.is_reverse, target_seq_id_fwd)) {
+            return 1;  // reverse strand
+        }
+    }
+    return -1;  // no common node either strand
+}
+
+/// Build strand-normalized source mappings for the reverse-strand case.
+///
+/// A reverse-complement read traverses the target's nodes in the OPPOSITE
+/// orientation and in reverse order (see the orientation analysis in the
+/// header / docs). This rewrites the list as if the read had been on the
+/// target's forward strand:
+///   - flip each node's orientation, so encode(node_id, is_reverse) now matches
+///     the orientation the target path traverses the node in,
+///   - reverse the order (read order → target-forward order), and
+///   - flip read offsets about the read length R (read_begin' = R - read_end,
+///     read_end' = R - read_begin) so they increase in target-forward order.
+/// Running find_anchors_for_strand() on this list yields anchors whose
+/// step_handles and base offsets are on the target's FORWARD strand — exactly
+/// what AnchorBackedPositionGraph needs. The Surjector then derives the '-'
+/// strand itself from the (reverse-oriented) graph alignment; these anchors
+/// only describe the target path's geometry, which is strand-independent.
+std::vector<SourceMapping> make_reverse_strand_mappings(
+    const std::vector<SourceMapping>& mappings) {
+    size_t read_len = 0;
+    for (const SourceMapping& m : mappings) {
+        read_len = std::max(read_len, m.read_end_offset);
+    }
+    std::vector<SourceMapping> out;
+    out.reserve(mappings.size());
+    for (size_t k = mappings.size(); k-- > 0; ) {
+        SourceMapping s = mappings[k];
+        s.is_reverse = !s.is_reverse;
+        const size_t rb = mappings[k].read_begin_offset;
+        const size_t re = mappings[k].read_end_offset;
+        s.read_begin_offset = (read_len >= re) ? (read_len - re) : 0;
+        s.read_end_offset   = (read_len >= rb) ? (read_len - rb) : 0;
+        out.push_back(s);
+    }
+    return out;
+}
+
+/// Core anchor search for ONE strand. `mappings` are oriented so each node
+/// matches the target path's forward-strand traversal (the read's own mappings
+/// for a forward-strand read; make_reverse_strand_mappings()'s output for a
+/// reverse-strand read). Returns anchors sorted by read_begin_offset, or an
+/// empty vector if no common node with the target was found. This is exactly
+/// the former body of build_surject_anchors_for_path, unchanged, so the
+/// forward-strand path is byte-for-byte identical to before.
+std::vector<PrecomputedAnchor> find_anchors_for_strand(
+    const gbwtgraph::GBZ& gbz,
+    FastLocate& rlbwt_rindex,
+    SampledTagArray& sampled,
+    const gbwt::FastLocate& gbwt_fast_locate,
+    const std::vector<SourceMapping>& mappings,
+    size_t target_seq_id_fwd) {
+    auto source_visits = build_source_visits(mappings);
+
+    // 1. FIRST anchor: first source mapping (read order) the target visits.
+    gbwt::edge_type first_edge{gbwt::ENDMARKER, 0};
+    size_t first_target_base = 0;
+    bool first_found = false;
+    for (size_t i = 0; i < mappings.size(); ++i) {
+        if (locate_target_visit(rlbwt_rindex, sampled, gbwt_fast_locate,
+                                mappings[i], target_seq_id_fwd,
+                                /*prefer_last=*/false, first_edge, first_target_base)) {
+            first_found = true;
+            break;
+        }
+    }
+    if (!first_found) return {};
+
+    // 2. LAST anchor: last source mapping (read order) the target visits.
+    gbwt::edge_type last_edge{gbwt::ENDMARKER, 0};
+    size_t last_target_base = 0;
+    bool last_found = false;
+    for (size_t i = mappings.size(); i-- > 0; ) {
+        if (locate_target_visit(rlbwt_rindex, sampled, gbwt_fast_locate,
+                                mappings[i], target_seq_id_fwd,
+                                /*prefer_last=*/true, last_edge, last_target_base)) {
+            last_found = true;
+            break;
+        }
+    }
+    if (!last_found) return {};
+
+    // Edge case: keep first/last ordered by target base offset.
+    if (first_target_base > last_target_base) {
+        std::swap(first_target_base, last_target_base);
+        std::swap(first_edge, last_edge);
+    }
+
+    // 3. Walk target forward from first to last, collecting matches.
+    std::vector<WalkMatch> matches = walk_target_collecting_matches(
+        gbz, first_edge, first_target_base, last_edge, last_target_base, source_visits);
+    if (matches.empty()) return {};
+
+    // 4. Group into chunks; sort into read order (walk emits target order).
+    std::vector<PrecomputedAnchor> anchors = group_matches_into_chunks(matches, mappings);
+    std::sort(anchors.begin(), anchors.end(),
+              [](const PrecomputedAnchor& a, const PrecomputedAnchor& b) {
+                  return a.read_begin_offset < b.read_begin_offset;
+              });
+    return anchors;
+}
+
 } // namespace
 
 // ── Public entry points ────────────────────────────────────────────────────
@@ -347,9 +487,6 @@ AnchorBuildResult build_surject_anchors_for_path(
 
     const size_t target_seq_id_fwd = 2 * target_gbwt_path_id;
 
-    // Source-side hashmap for the walk lookup.
-    auto source_visits = build_source_visits(source_mappings);
-
     // Target path length — used by AnchorBackedPositionGraph::get_path_length().
     // Prefer the caller's precomputed value (e.g. TranslationTable1's
     // SubpathInfo.length, computed by the identical extract-and-sum loop at
@@ -360,80 +497,42 @@ AnchorBuildResult build_surject_anchors_for_path(
         ? precomputed_target_path_length
         : compute_target_path_length(gbz, target_gbwt_path_id);
 
-    // 1. Find the FIRST anchor: walk source mappings forward, take the first
-    //    one whose node is visited by the target.
-    gbwt::edge_type first_edge{gbwt::ENDMARKER, 0};
-    size_t first_target_base = 0;
-    bool first_found = false;
-    for (size_t i = 0; i < source_mappings.size(); ++i) {
-        if (locate_target_visit(rlbwt_rindex, sampled, gbwt_fast_locate,
-                                source_mappings[i], target_seq_id_fwd,
-                                /*prefer_last=*/false,
-                                first_edge, first_target_base)) {
-            first_found = true;
-            break;
-        }
-    }
-    if (!first_found) {
+    // Determine which strand of the read aligns to the target. A revcomp read
+    // traverses the target's nodes in the opposite orientation, so it shares
+    // no node with the target's forward sequence in the read's own orientation
+    // — detect that up front (O(1) probes for a colinear read) instead of
+    // scanning every mapping in the wrong orientation.
+    int strand = detect_strand(gbwt_fast_locate, source_mappings, target_seq_id_fwd);
+    if (strand < 0) {
         result.status = AnchorBuildResult::Status::NoCommonNodes;
         return result;
     }
 
-    // 2. Find the LAST anchor: walk source mappings backward, take the first
-    //    one (from the end) with a target match. Picks the largest target base
-    //    offset for that mapping (prefer_last=true) so the walk terminates at
-    //    the right path position even when the target visits the node
-    //    multiple times.
-    gbwt::edge_type last_edge{gbwt::ENDMARKER, 0};
-    size_t last_target_base = 0;
-    bool last_found = false;
-    for (size_t i = source_mappings.size(); i-- > 0; ) {
-        if (locate_target_visit(rlbwt_rindex, sampled, gbwt_fast_locate,
-                                source_mappings[i], target_seq_id_fwd,
-                                /*prefer_last=*/true,
-                                last_edge, last_target_base)) {
-            last_found = true;
-            break;
-        }
+    std::vector<PrecomputedAnchor> anchors;
+    if (strand == 0) {
+        // Forward strand: the read's own mappings. Byte-for-byte the old path.
+        anchors = find_anchors_for_strand(gbz, rlbwt_rindex, sampled,
+                                          gbwt_fast_locate, source_mappings,
+                                          target_seq_id_fwd);
+    } else {
+        // Reverse strand: normalize to the target's forward orientation/order,
+        // then run the identical search. The resulting step_handles and base
+        // offsets are on the target's forward strand (what the position graph
+        // needs); the Surjector emits the '-' strand from the graph alignment.
+        std::vector<SourceMapping> rev_mappings =
+            make_reverse_strand_mappings(source_mappings);
+        anchors = find_anchors_for_strand(gbz, rlbwt_rindex, sampled,
+                                          gbwt_fast_locate, rev_mappings,
+                                          target_seq_id_fwd);
+        result.target_rev_strand = true;
     }
-    if (!last_found) {
-        // Should not happen if first_found succeeded, but handle defensively.
+
+    if (anchors.empty()) {
         result.status = AnchorBuildResult::Status::NoCommonNodes;
         return result;
     }
 
-    // Edge case: if first and last anchors are the same mapping, the walk is
-    // a single step.
-    if (first_target_base > last_target_base) {
-        std::swap(first_target_base, last_target_base);
-        std::swap(first_edge, last_edge);
-    }
-
-    // 3. Walk target forward from first to last, collecting matches.
-    std::vector<WalkMatch> matches = walk_target_collecting_matches(
-        gbz, first_edge, first_target_base, last_edge, last_target_base,
-        source_visits);
-
-    if (matches.empty()) {
-        // Defensive: at least the first anchor's match should have been emitted.
-        result.status = AnchorBuildResult::Status::NoCommonNodes;
-        return result;
-    }
-
-    // 4. Group into chunks.
-    result.anchors = group_matches_into_chunks(matches, source_mappings);
-
-    // The walk emits matches in target path order. For colinear alignments
-    // that equals read order, but when the target visits source nodes in a
-    // different order than the read (e.g. path y in test0_target_loop loops
-    // back through node 1, visiting node 4 before node 2), the chunks end
-    // up in target order. Surject's downstream pipeline expects chunks in
-    // read order, so sort by read_begin_offset here.
-    std::sort(result.anchors.begin(), result.anchors.end(),
-              [](const PrecomputedAnchor& a, const PrecomputedAnchor& b) {
-                  return a.read_begin_offset < b.read_begin_offset;
-              });
-
+    result.anchors = std::move(anchors);
     result.status = AnchorBuildResult::Status::Ok;
     return result;
 }
