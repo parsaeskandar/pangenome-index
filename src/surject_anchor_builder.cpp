@@ -73,6 +73,18 @@ size_t compute_target_path_length(const gbwtgraph::GBZ& gbz,
 ///
 /// Returns true if at least one target visit exists; output params are then
 /// populated. False otherwise.
+///
+/// PERFORMANCE — mirrors coordinate_translation.cpp's check_common_node():
+/// the cheap GBWT decompressSA() probe runs FIRST and the function returns
+/// early when the target does not visit this node, so the expensive RLBWT
+/// find_sequences_for_tag() (which enumerates every haplotype's visits to the
+/// node via locateNext) runs ONLY for nodes the target actually visits. When
+/// callers scan source mappings until the first/last target-visited node, this
+/// means find_sequences_for_tag() is invoked ~once per anchor (i.e. ~twice per
+/// read) instead of once per candidate mapping. The original order
+/// (find_sequences_for_tag first) made it the per-candidate cost and was the
+/// whole-genome bottleneck. The returned values are identical to that order:
+/// this is purely a reordering of two independent probes plus an early exit.
 bool locate_target_visit(
     FastLocate& rlbwt_rindex,
     SampledTagArray& sampled,
@@ -84,26 +96,12 @@ bool locate_target_visit(
     size_t& out_target_base_offset)
 {
     gbwt::node_type node = gbwt::Node::encode(mapping.node_id, mapping.is_reverse);
-    uint64_t tag_code = SampledTagArray::encode_value(mapping.node_id, mapping.is_reverse);
 
-    // 1) RLBWT: all haplotype visits to this node with base offsets.
-    std::vector<NodeVisit> rlbwt_visits = find_sequences_for_tag(rlbwt_rindex, sampled, tag_code);
-    std::vector<size_t> target_base_offsets;
-    target_base_offsets.reserve(rlbwt_visits.size());
-    for (const NodeVisit& v : rlbwt_visits) {
-        if (v.seq_id == target_seq_id_fwd) {
-            target_base_offsets.push_back(v.offset);
-        }
-    }
-    if (target_base_offsets.empty()) return false;
-    std::sort(target_base_offsets.begin(), target_base_offsets.end());
-
-    // 2) GBWT: all visits to this node from FastLocate, with their per-visit
-    //    GBWT seqOffsets. The INDEX into decompressSA's output is the
-    //    offset_in_record component of gbwt::edge_type (see
-    //    coordinate_translation.cpp:663-675).
+    // 1) GBWT decompressSA FIRST — the cheap gate (check_common_node:1399-1433).
+    //    Collect this node's target visits as (seqOffset, sa_index_in_decompressSA).
+    //    The INDEX into decompressSA's output is the offset_in_record component
+    //    of gbwt::edge_type (see coordinate_translation.cpp:663-675).
     std::vector<gbwt::size_type> sa_values = gbwt_fast_locate.decompressSA(node);
-    // (seqOffset, sa_index_in_decompressSA) for target visits only.
     std::vector<std::pair<size_t, size_t>> target_gbwt_visits;
     target_gbwt_visits.reserve(sa_values.size());
     for (size_t i = 0; i < sa_values.size(); ++i) {
@@ -113,11 +111,8 @@ bool locate_target_visit(
                 i);
         }
     }
-    if (target_gbwt_visits.empty()) {
-        // Inconsistent: RLBWT says there's a visit but GBWT doesn't agree.
-        // This shouldn't happen if both indexes are built from the same GBZ.
-        return false;
-    }
+    // Target does not visit this node → cheap reject, WITHOUT touching the RLBWT.
+    if (target_gbwt_visits.empty()) return false;
     // Sort by seqOffset DESCENDING. Larger GBWT seqOffset == earlier in path
     // (see coordinate_translation.cpp:1406 comment), so the i-th entry here
     // pairs with the i-th smallest base offset in target_base_offsets.
@@ -126,6 +121,26 @@ bool locate_target_visit(
                  const std::pair<size_t, size_t>& b) {
                   return a.first > b.first;
               });
+
+    // 2) RLBWT find_sequences_for_tag ONLY now that the target is confirmed to
+    //    visit this node — to read off the target base offset(s). This is the
+    //    single expensive call check_common_node makes for a confirmed common
+    //    node (coordinate_translation.cpp:1470).
+    uint64_t tag_code = SampledTagArray::encode_value(mapping.node_id, mapping.is_reverse);
+    std::vector<NodeVisit> rlbwt_visits = find_sequences_for_tag(rlbwt_rindex, sampled, tag_code);
+    std::vector<size_t> target_base_offsets;
+    target_base_offsets.reserve(rlbwt_visits.size());
+    for (const NodeVisit& v : rlbwt_visits) {
+        if (v.seq_id == target_seq_id_fwd) {
+            target_base_offsets.push_back(v.offset);
+        }
+    }
+    if (target_base_offsets.empty()) {
+        // Inconsistent: GBWT says there's a target visit but RLBWT doesn't agree.
+        // This shouldn't happen if both indexes are built from the same GBZ.
+        return false;
+    }
+    std::sort(target_base_offsets.begin(), target_base_offsets.end());
 
     // 3) Pair the chosen base offset with the matching GBWT visit.
     const size_t visit_count = std::min(target_base_offsets.size(),
@@ -312,7 +327,8 @@ AnchorBuildResult build_surject_anchors_for_path(
     SampledTagArray& sampled,
     const gbwt::FastLocate& gbwt_fast_locate,
     const std::vector<SourceMapping>& source_mappings,
-    size_t target_gbwt_path_id)
+    size_t target_gbwt_path_id,
+    size_t precomputed_target_path_length)
 {
     AnchorBuildResult result;
 
@@ -334,9 +350,15 @@ AnchorBuildResult build_surject_anchors_for_path(
     // Source-side hashmap for the walk lookup.
     auto source_visits = build_source_visits(source_mappings);
 
-    // Target path length — used by AnchorBackedPositionGraph::get_path_length()
-    // and as a safety guard for the LF walk.
-    result.target_path_length = compute_target_path_length(gbz, target_gbwt_path_id);
+    // Target path length — used by AnchorBackedPositionGraph::get_path_length().
+    // Prefer the caller's precomputed value (e.g. TranslationTable1's
+    // SubpathInfo.length, computed by the identical extract-and-sum loop at
+    // index-build time) to avoid extracting the whole target path here, which
+    // is O(path length) — a full chromosome for chromosome-scale targets.
+    // Coordinate translation never extracts the full path; this matches that.
+    result.target_path_length = (precomputed_target_path_length > 0)
+        ? precomputed_target_path_length
+        : compute_target_path_length(gbz, target_gbwt_path_id);
 
     // 1. Find the FIRST anchor: walk source mappings forward, take the first
     //    one whose node is visited by the target.
@@ -437,13 +459,14 @@ std::vector<AnchorBuildResult> build_surject_anchors(
     }
 
     // Each subpath name in T1 corresponds to a set of GBWT path ids
-    // (one SubpathInfo per fragment). Build anchors per fragment.
+    // (one SubpathInfo per fragment). Build anchors per fragment, passing
+    // sp.length so the builder doesn't re-extract the full target path.
     for (const std::string& name : subpath_names) {
         std::vector<SubpathInfo> subpaths = table1.subpaths(name);
         for (const SubpathInfo& sp : subpaths) {
             results.push_back(build_surject_anchors_for_path(
                 gbz, rlbwt_rindex, sampled, gbwt_fast_locate,
-                source_mappings, sp.path_id));
+                source_mappings, sp.path_id, sp.length));
         }
     }
     return results;

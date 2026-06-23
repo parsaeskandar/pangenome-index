@@ -10,6 +10,7 @@
 #include <gbwtgraph/gbz.h>
 #include <handlegraph/util.hpp>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -155,23 +156,49 @@ void Index::load(const std::string& gbz_path,
                  const std::string& gbwt_ri_path,
                  const std::string& table1_path,
                  const std::string& table2_path) {
-    mlockall(MCL_CURRENT | MCL_FUTURE);
+    // Pinning pages in RAM (mlockall) avoids page-fault stalls during queries,
+    // but mlockall(MCL_CURRENT | MCL_FUTURE) makes EVERY later allocation fail
+    // when RLIMIT_MEMLOCK (`ulimit -l`) is too small to lock the working set —
+    // which aborts index loading on most shared clusters (the default memlock
+    // limit is often only 64 KB). So pinning is OPT-IN: set PANINDEX_MLOCK=1
+    // only after raising `ulimit -l` (or with an admin-set unlimited limit).
+    // PANINDEX_NO_MLOCK is still honored (and now redundant) for back-compat.
+    if (std::getenv("PANINDEX_MLOCK") != nullptr &&
+        std::getenv("PANINDEX_NO_MLOCK") == nullptr) {
+        if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
+            std::perror("[Index::load] mlockall failed; continuing without pinning");
+        }
+    }
+
+    // Per-step progress logs so a bad_alloc identifies which artifact failed.
+    // Silence by setting PANINDEX_QUIET_LOAD=1.
+    const bool verbose = (std::getenv("PANINDEX_QUIET_LOAD") == nullptr);
+    auto log_step = [&](const char* msg) {
+        if (verbose) std::cerr << "[Index::load] " << msg << std::endl;
+    };
 
     // 1. RLBWT r-index
+    log_step(("[1/5] RLBWT r-index: " + ri_path).c_str());
     {
         std::ifstream rin(ri_path, std::ios::binary);
         if (!rin)
             throw std::runtime_error("Cannot open RLBWT r-index: " + ri_path);
         rlbwt_rindex_.load_encoded(rin);
+        log_step("[1/5]   load_encoded done");
         rlbwt_rindex_.ensure_last_rank();
+        log_step("[1/5]   ensure_last_rank done");
         rlbwt_rindex_.ensure_last_select();
+        log_step("[1/5]   ensure_last_select done");
     }
 
     // 2. GBZ (GBWT + GBWTGraph)
+    log_step(("[2/5] GBZ: " + gbz_path).c_str());
     gbz_ = std::make_unique<gbwtgraph::GBZ>();
     sdsl::simple_sds::load_from(*gbz_, gbz_path);
+    log_step("[2/5]   loaded");
 
     // 3. GBWT FastLocate
+    log_step(("[3/5] GBWT FastLocate: " + gbwt_ri_path).c_str());
     {
         std::ifstream gin(gbwt_ri_path, std::ios::binary);
         if (!gin)
@@ -183,34 +210,44 @@ void Index::load(const std::string& gbz_path,
         gbwt_rindex_ = std::make_unique<gbwt::FastLocate>();
         gbwt_rindex_->load(gin);
         gbwt_rindex_->setGBWT(gbz_->index);
+        log_step("[3/5]   loaded");
     }
 
     // 4. Sampled tag array
+    log_step(("[4/5] Sampled tag array: " + tags_path).c_str());
     {
         std::ifstream sin(tags_path, std::ios::binary);
         if (!sin)
             throw std::runtime_error("Cannot open sampled tags: " + tags_path);
         sampled_.load(sin);
+        log_step("[4/5]   load done");
         sampled_.ensure_run_rank();
+        log_step("[4/5]   ensure_run_rank done");
         sampled_.ensure_run_select();
+        log_step("[4/5]   ensure_run_select done");
     }
 
     // 5. Translation tables
+    log_step(("[5/5] Table 1: " + table1_path).c_str());
     {
         std::ifstream t1in(table1_path, std::ios::binary);
         if (!t1in)
             throw std::runtime_error("Cannot open Table 1: " + table1_path);
         table1_.load(t1in);
     }
+    log_step("[5/5]   T1 loaded");
+    log_step(("[5/5] Table 2: " + table2_path).c_str());
     {
         std::ifstream t2in(table2_path, std::ios::binary);
         if (!t2in)
             throw std::runtime_error("Cannot open Table 2: " + table2_path);
         table2_.load(t2in);
     }
+    log_step("[5/5]   T2 loaded");
 
     path_to_global_ = build_path_id_to_global(table1_);
     loaded_ = true;
+    log_step("[done] all indexes loaded");
 }
 
 std::vector<TranslatedInterval>
@@ -650,10 +687,57 @@ AnchorBuildPyResult Index::build_surject_anchors(
     FastLocate& rindex = const_cast<FastLocate&>(rlbwt_rindex_);
     SampledTagArray& sampled = const_cast<SampledTagArray&>(sampled_);
 
-    std::vector<panindexer::AnchorBuildResult> results =
-        panindexer::build_surject_anchors(
-            *gbz_, rindex, sampled, *gbwt_rindex_,
-            table1_, source_mappings, target_haplotype);
+    // Resolve `target_haplotype` to one or more T1 subpath ids.
+    //   1) Exact-name match against T1.names() — covers the surjection case
+    //      where the user passes a full path name (e.g. "GRCh38#0#chrM").
+    //   2) Fall back to haplotype-prefix match (target + "#") — covers the
+    //      translate-style case where the user passes a haplotype prefix
+    //      (e.g. "HG002#1" → matches "HG002#1#chr1", "HG002#1#chr2", …).
+    //
+    // panindexer::build_surject_anchors only does (2), so calling it with a
+    // full path name returns UnknownPath. We do the resolution here so both
+    // forms work transparently.
+    // Carry (path_id, path_length) together: SubpathInfo.length is the target
+    // path's base length, precomputed at index-build time by the same
+    // extract-and-sum loop build_surject_anchors_for_path would otherwise run.
+    // Passing it avoids a full target-path extraction per query.
+    std::vector<std::pair<size_t, size_t>> target_path_ids;
+    {
+        std::vector<std::string> t1_names = table1_.names();
+        std::vector<std::string> matched_names;
+        for (const auto& nm : t1_names) {
+            if (nm == target_haplotype) {
+                matched_names.push_back(nm);
+            }
+        }
+        if (matched_names.empty()) {
+            std::string prefix = target_haplotype;
+            if (prefix.empty() || prefix.back() != '#') prefix += '#';
+            for (const auto& nm : t1_names) {
+                if (nm.size() >= prefix.size() &&
+                    nm.compare(0, prefix.size(), prefix) == 0) {
+                    matched_names.push_back(nm);
+                }
+            }
+        }
+        for (const auto& nm : matched_names) {
+            auto sps = table1_.subpaths(nm);
+            for (const auto& sp : sps) {
+                target_path_ids.emplace_back(sp.path_id, sp.length);
+            }
+        }
+    }
+    if (target_path_ids.empty()) {
+        out.status = "unknown_path";
+        return out;
+    }
+
+    std::vector<panindexer::AnchorBuildResult> results;
+    results.reserve(target_path_ids.size());
+    for (const auto& [pid, plen] : target_path_ids) {
+        results.push_back(panindexer::build_surject_anchors_for_path(
+            *gbz_, rindex, sampled, *gbwt_rindex_, source_mappings, pid, plen));
+    }
 
     if (results.empty()) {
         out.status = "unknown_path";

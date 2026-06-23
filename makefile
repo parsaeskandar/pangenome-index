@@ -26,6 +26,24 @@ GBWTGRAPH_LIBS = $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a
 $(info gbwtgraph: linking vendored $(GBWTGRAPH_DIR)/lib/libgbwtgraph.a)
 endif
 
+# Override libgbwt location. Set GBWT_DIR=<path> to point at a specific build
+# (e.g. vg's Giraffe_server/lib + include) when on-disk index files were
+# produced by a different GBWT version than the one in $(LIB_DIR).
+GBWT_DIR ?=
+ifneq ($(strip $(GBWT_DIR)),)
+GBWT_LIB := $(GBWT_DIR)/lib/libgbwt.a
+ifeq ($(wildcard $(GBWT_LIB)),)
+GBWT_LIBS = -L$(GBWT_DIR)/lib -lgbwt
+$(info gbwt: linking -lgbwt from $(GBWT_DIR)/lib (no libgbwt.a found, using shared))
+else
+GBWT_LIBS = $(GBWT_LIB)
+$(info gbwt: linking vendored $(GBWT_LIB))
+endif
+CXX_FLAGS += -I$(GBWT_DIR)/include
+else
+GBWT_LIBS = -lgbwt
+endif
+
 # Zstandard (required by libgbwt). Default ~/lib for user installs; set ZSTD_LIB_DIR= for system-only paths.
 ZSTD_LIB_DIR ?= $(HOME)/lib
 ifeq ($(strip $(ZSTD_LIB_DIR)),)
@@ -39,7 +57,7 @@ GBWT_ZSTD_LIBS = $(ZSTD_LDFLAGS) -lzstd
 PARALLEL_FLAGS = -fopenmp -pthread
 
 # Libraries (gbwtgraph before gbwt for correct static resolution)
-LIBS = -L$(LIB_DIR) -Ldeps/grlBWT/build $(GBWTGRAPH_LIBS) -lgbwt -lhandlegraph -lsdsl -lgrlbwt -lcrypto $(GBWT_ZSTD_LIBS)
+LIBS = -L$(LIB_DIR) -Ldeps/grlBWT/build $(GBWTGRAPH_LIBS) $(GBWT_LIBS) -lhandlegraph -lsdsl -lgrlbwt -lcrypto $(GBWT_ZSTD_LIBS)
 
 # macOS-specific OpenMP & compiler handling
 ifeq ($(shell uname -s), Darwin)
@@ -93,8 +111,10 @@ grlbwt:
 	cd deps/grlBWT/build && cmake .. && make
 
 # Build static libgbwtgraph.a into $(GBWTGRAPH_DIR)/lib (requires SDSL_DIR, gbwt/handlegraph in LIB_DIR).
+# Forces -fPIC because this archive is embedded into the liftover_ext.so shared object.
+# Without it, the linker rejects R_X86_64_PC32 relocations: "can not be used when making a shared object".
 gbwtgraph-lib:
-	$(MAKE) -C "$(GBWTGRAPH_DIR)" SDSL_DIR="$(SDSL_DIR)" all
+	$(MAKE) -C "$(GBWTGRAPH_DIR)" SDSL_DIR="$(SDSL_DIR)" MY_CXX_FLAGS="-fPIC -O3" all
 
 directories: $(BUILD_BIN) $(BUILD_LIB) $(BUILD_OBJ)
 

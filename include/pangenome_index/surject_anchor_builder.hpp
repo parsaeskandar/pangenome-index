@@ -131,6 +131,13 @@ struct AnchorBuildResult {
  *   - `gbwt_fast_locate`: GBWT FastLocate for decompressSA queries.
  *   - `source_mappings`: graph alignment from Giraffe, in read order.
  *   - `target_gbwt_path_id`: the GBWT path id of the target subpath.
+ *   - `precomputed_target_path_length`: total base length of the target path,
+ *     if the caller already knows it (e.g. from TranslationTable1's
+ *     SubpathInfo.length, which is computed by the identical extract-and-sum
+ *     loop at index-build time). Pass 0 to have this function compute it by
+ *     extracting the full target path — O(path length), a whole chromosome for
+ *     chromosome-scale targets. Passing the precomputed value avoids that
+ *     extraction entirely (coordinate translation never extracts the full path).
  *
  * Outputs (via the returned struct):
  *   - `anchors`: in read order. May be empty if NoCommonNodes.
@@ -150,7 +157,8 @@ AnchorBuildResult build_surject_anchors_for_path(
     SampledTagArray& sampled,
     const gbwt::FastLocate& gbwt_fast_locate,
     const std::vector<SourceMapping>& source_mappings,
-    size_t target_gbwt_path_id);
+    size_t target_gbwt_path_id,
+    size_t precomputed_target_path_length = 0);
 
 /**
  * Convenience overload: resolve a target haplotype name (e.g.
