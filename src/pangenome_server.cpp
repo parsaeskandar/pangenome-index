@@ -91,6 +91,7 @@ struct FindSeqStats {
     size_t visits = 0;
     size_t last_run_nav_steps = 0;
     size_t last_run_length = 0;
+    double total_ms = 0.0;
 };
 extern thread_local FindSeqStats g_find_seq_stats;
 
@@ -746,37 +747,80 @@ AnchorBuildPyResult Index::build_surject_anchors(
         return out;
     }
 
-    // Reset the find_sequences_for_tag LF accumulator so the diagnostics below
-    // reflect only this query (all subpath attempts).
+    // Reset the diagnostics accumulators so they reflect only this query
+    // (all subpath attempts): the find_sequences_for_tag LF cost and the
+    // target-path walk LF cost.
     g_find_seq_stats = FindSeqStats{};
+    panindexer::g_anchor_walk_stats = panindexer::AnchorWalkStats{};
 
-    std::vector<panindexer::AnchorBuildResult> results;
-    results.reserve(target_path_ids.size());
+    // ── Restrict to the subpaths the read actually touches ──────────────────
+    // The previous code ran the full per-path build against EVERY resolved
+    // subpath. For a chromosome target that's thousands of subpaths, and each
+    // runs a detect_strand scan (~2 × n_source_mappings decompressSA) before
+    // discovering the read isn't on it — an O(subpaths × mappings) decompressSA
+    // blow-up (measured: >1M decompressSA calls and ~300 s for one read).
+    //
+    // A subpath the read does not visit produces zero anchors and is never the
+    // "best" result, so skipping it CANNOT change the output. We find the
+    // touched subpaths in a single pass: decompressSA each read node once and
+    // keep the resolved subpaths whose GBWT path id (seqId/2, either
+    // orientation) appears. That is O(n_source_mappings) decompressSA total,
+    // independent of how many subpaths the name resolved to.
+    std::unordered_set<size_t> target_pid_set;
+    std::unordered_map<size_t, size_t> len_by_pid;
+    target_pid_set.reserve(target_path_ids.size() * 2);
+    len_by_pid.reserve(target_path_ids.size() * 2);
     for (const auto& [pid, plen] : target_path_ids) {
+        target_pid_set.insert(pid);
+        len_by_pid[pid] = plen;
+    }
+
+    std::vector<std::pair<size_t, size_t>> touched;  // (path_id, length), first-seen order
+    std::unordered_set<size_t> touched_seen;
+    for (const panindexer::SourceMapping& sm : source_mappings) {
+        gbwt::node_type node = gbwt::Node::encode(
+            static_cast<gbwt::node_type>(sm.node_id), sm.is_reverse);
+        const auto _ds_t0 = std::chrono::high_resolution_clock::now();
+        std::vector<gbwt::size_type> sa = gbwt_rindex_->decompressSA(node);
+        panindexer::g_anchor_walk_stats.decompress_sa_ms +=
+            std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - _ds_t0).count();
+        panindexer::g_anchor_walk_stats.decompress_sa_calls++;
+        panindexer::g_anchor_walk_stats.decompress_sa_entries += sa.size();
+        for (gbwt::size_type v : sa) {
+            size_t pid = static_cast<size_t>(gbwt_rindex_->seqId(v)) / 2;
+            if (target_pid_set.count(pid) && touched_seen.insert(pid).second) {
+                touched.emplace_back(pid, len_by_pid[pid]);
+            }
+        }
+    }
+
+    // Build anchors only for the touched subpaths, keeping the same "pick the
+    // result with the most anchors" semantics as before.
+    std::vector<panindexer::AnchorBuildResult> results;
+    results.reserve(touched.size());
+    for (const auto& [pid, plen] : touched) {
         results.push_back(panindexer::build_surject_anchors_for_path(
             *gbz_, rindex, sampled, *gbwt_rindex_, source_mappings, pid, plen));
     }
 
     if (results.empty()) {
-        out.status = "unknown_path";
-        return out;
-    }
-
-    // Pick the subpath result with the most anchors. If none have anchors,
-    // fall back to the first (so status/target_path_length get reported).
-    const panindexer::AnchorBuildResult* best = &results.front();
-    for (const auto& r : results) {
-        if (r.anchors.size() > best->anchors.size()) {
-            best = &r;
+        // Name resolved, but the read shares no node with any of its subpaths.
+        out.status = "no_common_nodes";
+    } else {
+        const panindexer::AnchorBuildResult* best = &results.front();
+        for (const auto& r : results) {
+            if (r.anchors.size() > best->anchors.size()) {
+                best = &r;
+            }
         }
-    }
-
-    out.status = status_token(best->status);
-    out.target_path_length = best->target_path_length;
-    out.target_rev_strand = best->target_rev_strand;
-    out.anchors.reserve(best->anchors.size());
-    for (const auto& a : best->anchors) {
-        out.anchors.push_back(to_anchor_record(a));
+        out.status = status_token(best->status);
+        out.target_path_length = best->target_path_length;
+        out.target_rev_strand = best->target_rev_strand;
+        out.anchors.reserve(best->anchors.size());
+        for (const auto& a : best->anchors) {
+            out.anchors.push_back(to_anchor_record(a));
+        }
     }
 
     // Report the find_sequences_for_tag LF cost accumulated over this query.
@@ -786,6 +830,20 @@ AnchorBuildPyResult Index::build_surject_anchors(
     out.find_seq_visits    = g_find_seq_stats.visits;
     out.last_run_nav_steps = g_find_seq_stats.last_run_nav_steps;
     out.last_run_length    = g_find_seq_stats.last_run_length;
+    // Report the target-path walk LF cost.
+    out.walk_lf_steps     = panindexer::g_anchor_walk_stats.walk_lf_steps;
+    out.walk_span         = panindexer::g_anchor_walk_stats.walk_span;
+    out.first_anchor_base = panindexer::g_anchor_walk_stats.first_anchor_base;
+    out.last_anchor_base  = panindexer::g_anchor_walk_stats.last_anchor_base;
+    // Wall-clock attribution of the build time.
+    out.find_seq_ms            = g_find_seq_stats.total_ms;
+    out.decompress_sa_ms       = panindexer::g_anchor_walk_stats.decompress_sa_ms;
+    out.walk_ms                = panindexer::g_anchor_walk_stats.walk_ms;
+    out.decompress_sa_calls    = panindexer::g_anchor_walk_stats.decompress_sa_calls;
+    out.decompress_sa_entries  = panindexer::g_anchor_walk_stats.decompress_sa_entries;
+    // Confirm the call explosion = subpath loop × per-subpath strand scan.
+    out.n_target_subpaths = target_path_ids.size();
+    out.n_source_mappings = source_mappings.size();
     return out;
 }
 

@@ -4,6 +4,7 @@
 #include <handlegraph/util.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <deque>
 #include <limits>
 #include <stdexcept>
@@ -29,6 +30,10 @@ extern std::vector<NodeVisit> find_sequences_for_tag(
     uint64_t tag_code);
 
 namespace panindexer {
+
+// Diagnostics accumulator for the target-path LF walk (see header). Defined
+// here (external linkage); read from pangenome_server.cpp.
+thread_local AnchorWalkStats g_anchor_walk_stats;
 
 namespace {
 
@@ -101,7 +106,13 @@ bool locate_target_visit(
     //    Collect this node's target visits as (seqOffset, sa_index_in_decompressSA).
     //    The INDEX into decompressSA's output is the offset_in_record component
     //    of gbwt::edge_type (see coordinate_translation.cpp:663-675).
+    const auto _ds_t0 = std::chrono::high_resolution_clock::now();
     std::vector<gbwt::size_type> sa_values = gbwt_fast_locate.decompressSA(node);
+    g_anchor_walk_stats.decompress_sa_ms +=
+        std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _ds_t0).count();
+    g_anchor_walk_stats.decompress_sa_calls++;
+    g_anchor_walk_stats.decompress_sa_entries += sa_values.size();
     std::vector<std::pair<size_t, size_t>> target_gbwt_visits;
     target_gbwt_visits.reserve(sa_values.size());
     for (size_t i = 0; i < sa_values.size(); ++i) {
@@ -225,6 +236,7 @@ std::vector<WalkMatch> walk_target_collecting_matches(
             gbwt::Node::id(cursor.first), gbwt::Node::is_reverse(cursor.first));
         size_t node_len = gbz.graph.get_length(handle);
         gbwt::edge_type next = gbz.index.LF(cursor);
+        g_anchor_walk_stats.walk_lf_steps++;   // diagnostics: this is the real hot path
         if (next.first == gbwt::ENDMARKER) break;
         cursor = next;
         cursor_base += node_len;
@@ -326,7 +338,13 @@ bool target_visits_node(const gbwt::FastLocate& gbwt_fast_locate,
                         int64_t node_id, bool is_reverse,
                         size_t target_seq_id_fwd) {
     gbwt::node_type node = gbwt::Node::encode(node_id, is_reverse);
+    const auto _ds_t0 = std::chrono::high_resolution_clock::now();
     std::vector<gbwt::size_type> sa_values = gbwt_fast_locate.decompressSA(node);
+    g_anchor_walk_stats.decompress_sa_ms +=
+        std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _ds_t0).count();
+    g_anchor_walk_stats.decompress_sa_calls++;
+    g_anchor_walk_stats.decompress_sa_entries += sa_values.size();
     for (gbwt::size_type sa : sa_values) {
         if (gbwt_fast_locate.seqId(sa) == target_seq_id_fwd) return true;
     }
@@ -443,9 +461,21 @@ std::vector<PrecomputedAnchor> find_anchors_for_strand(
         std::swap(first_edge, last_edge);
     }
 
+    // Diagnostics: how far apart the chosen anchors are on the target. The walk
+    // below traverses this whole span via LF, so a large span (repeated boundary
+    // nodes whose chosen occurrences are chromosome-scale apart) = a slow build.
+    g_anchor_walk_stats.walks++;
+    g_anchor_walk_stats.first_anchor_base = first_target_base;
+    g_anchor_walk_stats.last_anchor_base = last_target_base;
+    g_anchor_walk_stats.walk_span = last_target_base - first_target_base;
+
     // 3. Walk target forward from first to last, collecting matches.
+    const auto _walk_t0 = std::chrono::high_resolution_clock::now();
     std::vector<WalkMatch> matches = walk_target_collecting_matches(
         gbz, first_edge, first_target_base, last_edge, last_target_base, source_visits);
+    g_anchor_walk_stats.walk_ms +=
+        std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _walk_t0).count();
     if (matches.empty()) return {};
 
     // 4. Group into chunks; sort into read order (walk emits target order).

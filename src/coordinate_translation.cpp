@@ -67,6 +67,7 @@ struct FindSeqStats {
     size_t visits = 0;            // total NodeVisit entries produced (node's pangenome usage)
     size_t last_run_nav_steps = 0;// LF steps to navigate from the sample to the LAST run's start
     size_t last_run_length = 0;   // number of positions in the LAST run iterated
+    double total_ms = 0.0;        // wall-clock time spent in find_sequences_for_tag
 };
 thread_local FindSeqStats g_find_seq_stats;
 
@@ -1010,6 +1011,7 @@ vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& s
     vector<NodeVisit> visits;
 
     g_find_seq_stats.calls++;   // diagnostics (see FindSeqStats)
+    const auto _fs_t0 = high_resolution_clock::now();
 
     if (debug) {
         cerr << "[find_sequences_for_tag] Searching for tag_code=" << tag_code << endl;
@@ -1204,7 +1206,9 @@ vector<NodeVisit> find_sequences_for_tag(FastLocate& r_index, SampledTagArray& s
     if (debug) {
         cerr << "  Total visits found: " << visits.size() << endl;
     }
-    
+
+    g_find_seq_stats.total_ms +=
+        duration<double, std::milli>(high_resolution_clock::now() - _fs_t0).count();
     return visits;
 }
 

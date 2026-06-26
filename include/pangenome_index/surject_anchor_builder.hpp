@@ -42,6 +42,24 @@
 
 namespace panindexer {
 
+/// Diagnostics for the target-path GBWT LF walk (walk_target_collecting_matches).
+/// The walk's length = number of gbz.index.LF steps between the first and last
+/// anchor on the target path; when boundary nodes recur, the chosen anchor
+/// occurrences can be chromosome-scale apart and dominate build time. Reset
+/// before a measured region and read afterwards. Thread-local; external linkage.
+struct AnchorWalkStats {
+    size_t walk_lf_steps = 0;     ///< total gbz.index.LF calls during the walk(s)
+    size_t walks = 0;             ///< number of walk_target_collecting_matches calls
+    size_t first_anchor_base = 0; ///< base offset of the first anchor (last successful walk)
+    size_t last_anchor_base = 0;  ///< base offset of the last anchor (last successful walk)
+    size_t walk_span = 0;         ///< last_anchor_base - first_anchor_base (bases spanned)
+    double walk_ms = 0.0;         ///< wall-clock time in walk_target_collecting_matches
+    size_t decompress_sa_calls = 0;   ///< number of gbwt FastLocate decompressSA() calls
+    size_t decompress_sa_entries = 0; ///< total SA values returned across those calls
+    double decompress_sa_ms = 0.0;    ///< wall-clock time in decompressSA()
+};
+extern thread_local AnchorWalkStats g_anchor_walk_stats;
+
 /// Minimal per-mapping payload the anchor builder needs from a Giraffe-style
 /// graph alignment. The caller (engine code that has vg::Alignment) converts
 /// each Mapping into one of these so the liftover library doesn't have to

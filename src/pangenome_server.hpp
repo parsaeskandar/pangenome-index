@@ -63,6 +63,30 @@ struct AnchorBuildPyResult {
     uint64_t find_seq_visits = 0;
     uint64_t last_run_nav_steps = 0;
     uint64_t last_run_length = 0;
+
+    /// Diagnostics for the target-path GBWT LF walk (the other candidate
+    /// bottleneck). walk_lf_steps is the number of gbz.index.LF calls; walk_span
+    /// is how far apart (in target bases) the chosen first/last anchors are —
+    /// a large span means the walk traverses a big chunk of the target path.
+    uint64_t walk_lf_steps = 0;
+    uint64_t walk_span = 0;
+    uint64_t first_anchor_base = 0;
+    uint64_t last_anchor_base = 0;
+
+    /// Wall-clock attribution of the build (ms): which phase actually eats the
+    /// time when LF counts are small (points at per-call cost / cold memory).
+    double find_seq_ms = 0.0;       ///< time in find_sequences_for_tag
+    double decompress_sa_ms = 0.0;  ///< time in gbwt decompressSA
+    double walk_ms = 0.0;           ///< time in the target-path walk
+    uint64_t decompress_sa_calls = 0;
+    uint64_t decompress_sa_entries = 0;
+
+    /// How many target subpaths the name resolved to (we currently run the full
+    /// per-path build against EACH), and how many source mappings the GAF
+    /// produced. decompress_sa_calls should track ~n_target_subpaths × 2 ×
+    /// n_source_mappings — these confirm the call explosion is the subpath loop.
+    uint64_t n_target_subpaths = 0;
+    uint64_t n_source_mappings = 0;
 };
 
 class Index {

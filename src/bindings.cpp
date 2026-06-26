@@ -63,6 +63,19 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def_readwrite("find_seq_visits",    &AnchorBuildPyResult::find_seq_visits)
         .def_readwrite("last_run_nav_steps", &AnchorBuildPyResult::last_run_nav_steps)
         .def_readwrite("last_run_length",    &AnchorBuildPyResult::last_run_length)
+        // target-path walk diagnostics
+        .def_readwrite("walk_lf_steps",      &AnchorBuildPyResult::walk_lf_steps)
+        .def_readwrite("walk_span",          &AnchorBuildPyResult::walk_span)
+        .def_readwrite("first_anchor_base",  &AnchorBuildPyResult::first_anchor_base)
+        .def_readwrite("last_anchor_base",   &AnchorBuildPyResult::last_anchor_base)
+        // wall-clock attribution (ms)
+        .def_readwrite("find_seq_ms",        &AnchorBuildPyResult::find_seq_ms)
+        .def_readwrite("decompress_sa_ms",   &AnchorBuildPyResult::decompress_sa_ms)
+        .def_readwrite("walk_ms",            &AnchorBuildPyResult::walk_ms)
+        .def_readwrite("decompress_sa_calls",   &AnchorBuildPyResult::decompress_sa_calls)
+        .def_readwrite("decompress_sa_entries", &AnchorBuildPyResult::decompress_sa_entries)
+        .def_readwrite("n_target_subpaths",  &AnchorBuildPyResult::n_target_subpaths)
+        .def_readwrite("n_source_mappings",  &AnchorBuildPyResult::n_source_mappings)
         .def("__repr__", [](const AnchorBuildPyResult& r) {
             return "<AnchorBuildResult status='" + r.status +
                    "' n_anchors=" + std::to_string(r.anchors.size()) +
