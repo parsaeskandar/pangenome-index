@@ -146,6 +146,22 @@ path_names_for_haplotype(const TranslationTable1& t1,
                          const std::string& haplotype_prefix) {
     std::vector<std::string> names = t1.names();
     std::vector<std::string> result;
+
+    // 1) Exact full-name match first: a full contig/path name like
+    //    "CHM13#0#chr10" resolves to just that contig, so a query interval
+    //    means that one locus (not the same offset on every contig).
+    for (const std::string& name : names) {
+        if (name == haplotype_prefix) {
+            result.push_back(name);
+        }
+    }
+    if (!result.empty()) {
+        return result;
+    }
+
+    // 2) Otherwise treat the argument as a haplotype prefix ("CHM13#0") and
+    //    match every contig under it. (Same behavior as before; note the
+    //    interval is then looked up in each matched contig's coordinates.)
     std::string prefix = haplotype_prefix;
     if (prefix.empty() || prefix.back() != '#') {
         prefix += '#';
@@ -282,6 +298,23 @@ Index::translate(const std::string& src_haplotype,
     size_t global_start = static_cast<size_t>(start);
     size_t global_end   = static_cast<size_t>(end);
 
+    // The target may be a haplotype ("GRCh38#0") or a full contig
+    // ("GRCh38#0#chr10"). T2 is keyed by the 2-field haplotype name, so we
+    // always look up with the first two '#'-fields; when a contig is named,
+    // we additionally keep only target paths on that contig.
+    std::string tgt_key = tgt_haplotype;
+    std::string tgt_contig_filter;
+    {
+        size_t h1 = tgt_haplotype.find('#');
+        if (h1 != std::string::npos) {
+            size_t h2 = tgt_haplotype.find('#', h1 + 1);
+            if (h2 != std::string::npos) {
+                tgt_key = tgt_haplotype.substr(0, h2);   // e.g. "GRCh38#0"
+                tgt_contig_filter = tgt_haplotype;        // e.g. "GRCh38#0#chr10"
+            }
+        }
+    }
+
     // The underlying query functions take non-const references (they read, not write,
     // but were not declared const).  const_cast is safe here because those functions
     // do not mutate the objects after construction.
@@ -321,7 +354,7 @@ Index::translate(const std::string& src_haplotype,
         if (local_end <= local_start) continue;
 
         std::vector<TargetInterval> tgt_intervals =
-            table2_.lookup(src_path_id, tgt_haplotype, local_start, local_end);
+            table2_.lookup(src_path_id, tgt_key, local_start, local_end);
         if (tgt_intervals.empty()) continue;
 
         size_t src_seq_id = 2 * src_path_id;
@@ -333,8 +366,23 @@ Index::translate(const std::string& src_haplotype,
         for (const TargetInterval& ti : tgt_intervals)
             distinct_tgt_paths.insert(ti.tgt_path_id);
 
+        // If a specific target contig was named, drop target paths on any
+        // other contig (e.g. paralogous hits on a different chromosome).
+        if (!tgt_contig_filter.empty()) {
+            std::unordered_set<size_t> filtered;
+            for (size_t pid : distinct_tgt_paths) {
+                auto itn = path_to_global_.find(pid);
+                if (itn != path_to_global_.end() &&
+                    itn->second.first == tgt_contig_filter) {
+                    filtered.insert(pid);
+                }
+            }
+            distinct_tgt_paths.swap(filtered);
+        }
+        if (distinct_tgt_paths.empty()) continue;
+
         std::vector<IntervalMapping> segs =
-            table2_.segments(src_path_id, tgt_haplotype);
+            table2_.segments(src_path_id, tgt_key);
 
         for (size_t tgt_path_id : distinct_tgt_paths) {
             size_t extent_start = local_end, extent_end = local_start;
@@ -400,7 +448,14 @@ Index::translate(const std::string& src_haplotype,
     results.reserve(all_raw.size());
     for (const HaplotypeTranslation& ht : all_raw) {
         TranslatedInterval ti;
-        ti.haplotype = tgt_haplotype;
+        // Report the actual target CONTIG the position resolved to (e.g.
+        // "GRCh38#0#chr10"), not just the queried haplotype ("GRCh38#0").
+        // The contig is known from the resolved target path id; fall back to
+        // the queried haplotype name if it isn't in the path→name map.
+        auto it_name = path_to_global_.find(ht.target_path_id);
+        ti.haplotype = (it_name != path_to_global_.end())
+                       ? it_name->second.first
+                       : tgt_haplotype;
         ti.start     = static_cast<int64_t>(ht.source_haplotype_offset);
         ti.end       = static_cast<int64_t>(ht.target_haplotype_offset);
         ti.strand    = '+';

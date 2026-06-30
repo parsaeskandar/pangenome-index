@@ -202,7 +202,14 @@ class GiraffeServerMiddleware:
             proc.stdin.write("FLUSH_NOW\n")
             proc.stdin.flush()
 
-            return self._read_framed_batch(proc, names)
+            try:
+                return self._read_framed_batch(proc, names)
+            except RuntimeError:
+                # A desynced/partial/timed-out frame leaves stale lines buffered;
+                # clear them so the failure stays isolated to this call instead
+                # of cascading into every subsequent request.
+                self.resync()
+                raise
 
     def map_sequences(
         self,
@@ -279,7 +286,11 @@ class GiraffeServerMiddleware:
             proc.stdin.flush()
 
             # Read the framed response — one READ frame for this request.
-            result = self._read_framed_batch(proc, [read_name])
+            try:
+                result = self._read_framed_batch(proc, [read_name])
+            except RuntimeError:
+                self.resync()  # isolate a desync to this call (see map_reads)
+                raise
             return result[0] if result else []
 
     @property
@@ -314,6 +325,27 @@ class GiraffeServerMiddleware:
                 mapped.append(self._readline_with_timeout(proc, deadline))
             out.append(mapped)
         return out
+
+    def resync(self, settle_s: float = 1.0) -> int:
+        """Discard any buffered (plus briefly-awaited straggler) stdout lines to
+        recover from a framing desync, so one bad or timed-out frame does not
+        corrupt every subsequent request. Returns the number of lines dropped.
+
+        Safe to call between requests: in normal operation nothing is buffered
+        between a completed request and the next, so this is a no-op; after a
+        partial/failed frame read it clears the leftover lines."""
+        dropped = 0
+        deadline = time.monotonic() + max(0.0, settle_s)
+        with self._stdout_cond:
+            while True:
+                while self._stdout_lines:
+                    self._stdout_lines.popleft()
+                    dropped += 1
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._stdout_closed:
+                    break
+                self._stdout_cond.wait(timeout=remaining)
+        return dropped
 
     def _readline_with_timeout(self, proc: subprocess.Popen[str], deadline: float) -> str:
         while True:
