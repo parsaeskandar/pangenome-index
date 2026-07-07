@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import threading
 import time
 from collections import deque
@@ -390,11 +392,20 @@ class GiraffeServerMiddleware:
             self.cfg.output_timeout_s = saved_timeout
 
     def _drain_stderr(self, stderr_stream) -> None:
+        # The server's stderr is captured into a rolling buffer (surfaced on
+        # errors). Also forward it to our own stderr so server-side diagnostics
+        # are actually visible: timing lines always, everything else when
+        # GIRAFFE_SERVER_STDERR is set. Without this, GIRAFFE_SURJECT_TIMING=1
+        # produces lines that never reach the terminal.
+        echo_all = os.environ.get("GIRAFFE_SERVER_STDERR") not in (None, "", "0")
         try:
             for line in stderr_stream:
+                text = line.rstrip("\n")
                 with self._stderr_cond:
-                    self._stderr_tail.append(line.rstrip("\n"))
+                    self._stderr_tail.append(text)
                     self._stderr_cond.notify_all()
+                if echo_all or "[surject" in text:   # [surject-timing] and [surject-phase]
+                    print(text, file=sys.stderr, flush=True)
         except Exception:
             pass
 
