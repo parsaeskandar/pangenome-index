@@ -20,11 +20,14 @@ Defense-in-depth (the CGI also rate-limits/validates, but we don't trust it):
   - job TTL + eviction, capped job store
   - structured logs (no raw sequences) + metrics + /healthz
 
-Stdlib only. Concurrency is effectively 1 worker: the engine is a single
-`vg giraffe-server` subprocess and the coordinate index is not reentrant, so
-jobs are processed one at a time (the engine parallelizes within a job via its
-own -t threads). The queue + 429 provide the backpressure; raising real
-parallelism would require multiple engine backends.
+Stdlib only. Concurrency: the middleware multiplexes a single `vg
+giraffe-server` subprocess (one loaded index copy) — concurrent jobs' reads are
+coalesced into shared mapping batches and demultiplexed back by name, so
+`--max-concurrent N` runs N worker threads that genuinely overlap on mapping and
+surjection without loading the indexes N times. The coordinate-index
+anchor-building step holds the GIL, so that stage serializes across workers (it
+is cheap relative to mapping); releasing the GIL in the pybind11 bindings is a
+later optimization. The queue + 429 still provide backpressure.
 """
 from __future__ import annotations
 
@@ -60,7 +63,7 @@ class ApiConfig:
     max_seq_len: int = 100_000          # 100 kb — supports long reads
     max_total_bytes: int = 10_000_000   # 10 MB request body cap
     # §1 concurrency / queue
-    max_concurrent: int = 1             # engine is a single subprocess; see note above
+    max_concurrent: int = 1             # N worker threads; the middleware multiplexes the single engine (see note above)
     max_queued: int = 32
     # §2 / §6 timeouts and lifecycle
     job_timeout_s: float = 120.0
@@ -631,8 +634,8 @@ def main() -> int:
     if cfg.auth_token is None:
         print("WARNING: PANGENOME_API_TOKEN not set — auth is DISABLED.", file=sys.stderr)
     if cfg.max_concurrent > 1:
-        print("WARNING: max_concurrent>1 is unsafe with a single engine/coord index; "
-              "jobs will still serialize.", file=sys.stderr)
+        print(f"INFO: {cfg.max_concurrent} worker threads; the middleware multiplexes the "
+              "single engine, so jobs overlap on one loaded index copy.", file=sys.stderr)
 
     metrics = Metrics()
     service = Service(cfg, mw=None, stub=args.stub, metrics=metrics)

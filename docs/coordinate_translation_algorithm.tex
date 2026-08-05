@@ -1,0 +1,201 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{geometry}
+\usepackage{hyperref}
+
+\geometry{margin=1in}
+
+\title{Coordinate Translation Algorithm for Pangenome Index}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Overview}
+
+This document describes the algorithm for translating coordinates between two haplotypes (source and target) in a pangenome graph using the GBWT (Graph Burrows-Wheeler Transform) index and FastLocate r-index. The algorithm identifies common nodes between haplotypes and performs forward traversal to map positions.
+
+\section{Problem Statement}
+
+Given:
+\begin{itemize}
+    \item A pangenome graph indexed with GBWT
+    \item A source haplotype with sequence ID $s_{id}$ and an interval $[s_{start}, s_{end}]$ (node offsets)
+    \item A target haplotype with sequence ID $t_{id}$
+    \item Sampled tag array containing node information
+\end{itemize}
+
+Find: A mapping from each node offset in the source interval to the corresponding node offset in the target haplotype.
+
+\section{Algorithm}
+
+\subsection{Step 1: Find Tags in Source Interval}
+
+Using the RLBWT r-index and sampled tag array, identify all tags (nodes) that appear in the source haplotype within the specified interval $[s_{start}, s_{end}]$.
+
+\begin{algorithmic}[1]
+    \State $tags \gets \emptyset$
+    \State Extract all tags from RLBWT r-index for sequence $s_{id}$ in interval $[s_{start}, s_{end}]$
+    \State Sort tags by their $tag\_code$ (ascending order)
+    \State \Return $tags$
+\end{algorithmic}
+
+\subsection{Step 2: Find First and Last Common Nodes}
+
+Using GBWT FastLocate, identify the first (smallest $tag\_code$) and last (largest $tag\_code$) common nodes between source and target haplotypes.
+
+\begin{algorithmic}[1]
+    \State $first\_common \gets \text{null}$
+    \State $last\_common \gets \text{null}$
+    \State Sort $tags$ by $tag\_code$ (ascending)
+    \For{each $tag \in tags$ (in sorted order)}
+        \State $node \gets \text{decode}(tag.tag\_code)$
+        \State $sa\_values \gets \text{decompressSA}(node)$ \Comment{Get all occurrences of this node}
+        \State $source\_visits \gets \text{filter}(sa\_values, seq\_id = s_{id})$
+        \State $target\_visits \gets \text{filter}(sa\_values, seq\_id = t_{id})$
+        \If{$source\_visits \neq \emptyset$ AND $target\_visits \neq \emptyset$}
+            \State \Comment{Found common node}
+            \If{$first\_common = \text{null}$}
+                \State $first\_common \gets (source\_offset, target\_offset, tag\_code)$
+            \EndIf
+            \State $last\_common \gets (source\_offset, target\_offset, tag\_code)$ \Comment{Always update}
+        \EndIf
+    \EndFor
+    \State \Return $(first\_common, last\_common)$
+\end{algorithmic}
+
+\textbf{Note:} For each common node, we select the earliest occurrence (largest offset value) in both paths, as GBWT uses larger offsets to represent earlier positions in paths.
+
+\subsection{Step 3: Forward Traversal Using LF Mapping}
+
+Starting from the first common node (anchor), traverse both paths forward using GBWT's LF mapping until reaching the last common node.
+
+\begin{algorithmic}[1]
+    \State $offset\_map \gets \emptyset$
+    \State $src\_pos \gets \text{get\_position}(first\_common.source\_offset)$
+    \State $tgt\_pos \gets \text{get\_position}(first\_common.target\_offset)$
+    \State $source\_path\_offset \gets first\_common.source\_offset$
+    \State $target\_path\_offset \gets first\_common.target\_offset$
+    \State Add $(first\_common.source\_offset, first\_common.target\_offset)$ to $offset\_map$
+    
+    \While{true}
+        \State $next\_src\_pos \gets \text{LF}(src\_pos)$ \Comment{Move forward one node}
+        \State $next\_tgt\_pos \gets \text{LF}(tgt\_pos)$
+        
+        \If{$next\_src\_pos = \text{ENDMARKER}$ OR $next\_tgt\_pos = \text{ENDMARKER}$}
+            \State \textbf{break} \Comment{Path ended}
+        \EndIf
+        
+        \State $source\_path\_offset \gets source\_path\_offset + 1$
+        \State $target\_path\_offset \gets target\_path\_offset + 1$
+        
+        \State $current\_node \gets \text{get\_node}(next\_src\_pos)$
+        \State $current\_tag\_code \gets \text{encode}(current\_node)$
+        
+        \Comment{Check if we've reached the last common node}
+        \If{$source\_path\_offset \geq last\_common.source\_offset$ OR $current\_tag\_code > last\_common.tag\_code$}
+            \State \textbf{break} \Comment{Reached last common node}
+        \EndIf
+        
+        \Comment{Map positions within the source interval}
+        \If{$source\_path\_offset \in [s_{start}, s_{end}]$}
+            \State $offset\_map[source\_path\_offset] \gets target\_path\_offset$
+        \EndIf
+        
+        \State $src\_pos \gets next\_src\_pos$
+        \State $tgt\_pos \gets next\_tgt\_pos$
+    \EndWhile
+    
+    \State \Return $offset\_map$
+\end{algorithmic}
+
+\section{Key Concepts}
+
+\subsection{GBWT Path Offsets}
+
+In GBWT, paths are represented as sequences of nodes. The \textit{path offset} refers to the number of nodes from the start of the path (0-indexed). This is different from base-level offsets used in sequence coordinates.
+
+\subsection{LF Mapping in GBWT}
+
+Unlike standard FM-index LF mapping which moves backward, GBWT's LF mapping moves \textit{forward} along paths:
+\begin{itemize}
+    \item Each node's record stores outgoing edges (next nodes)
+    \item $\text{LF}(pos)$ returns the next node position along the path
+    \item One LF operation advances one node forward (not one base)
+\end{itemize}
+
+\subsection{Tag Code Encoding}
+
+Tags encode node information as:
+\[
+tag\_code = ((node\_id - 1) \ll 1) | is\_reverse) + 1
+\]
+
+where:
+\begin{itemize}
+    \item $node\_id$ is the node identifier
+    \item $is\_reverse$ is 1 if the node is reverse-oriented, 0 otherwise
+    \item The $+1$ ensures $tag\_code > 0$ for all valid nodes
+\end{itemize}
+
+\subsection{Stop Criteria}
+
+The traversal stops when:
+\begin{enumerate}
+    \item Either path reaches ENDMARKER (path end), OR
+    \item The current position reaches or exceeds the last common node's offset, OR
+    \item The current node's $tag\_code$ exceeds the last common node's $tag\_code$
+\end{enumerate}
+
+This ensures we only map coordinates within the region bounded by the first and last common nodes.
+
+\section{Complexity}
+
+\begin{itemize}
+    \item \textbf{Step 1 (Find Tags):} $O(k)$ where $k$ is the number of tags in the interval
+    \item \textbf{Step 2 (Find Common Nodes):} $O(k \cdot m)$ where $m$ is the average number of occurrences per node
+    \item \textbf{Step 3 (Traversal):} $O(n)$ where $n$ is the number of nodes between first and last common nodes
+\end{itemize}
+
+The overall complexity is dominated by Step 2, which depends on the number of tags and their occurrences in the GBWT index.
+
+\section{Implementation Details}
+
+\subsection{GBWT FastLocate}
+
+The algorithm uses \texttt{gbwt::FastLocate::decompressSA()} to efficiently retrieve all suffix array values (occurrences) for a given node. Each occurrence contains:
+\begin{itemize}
+    \item Sequence ID ($seq\_id$)
+    \item Sequence offset ($seq\_offset$) - node offset in the path
+\end{itemize}
+
+\subsection{Position Representation}
+
+GBWT positions are represented as \texttt{edge\_type} = $(node, offset\_in\_node\_record)$, where:
+\begin{itemize}
+    \item $node$ is the GBWT node identifier
+    \item $offset\_in\_node\_record$ is the index within the node's BWT record
+\end{itemize}
+
+\section{Example}
+
+Consider two haplotypes sharing nodes at offsets:
+\begin{itemize}
+    \item First common node: $tag\_code = 5$, $source\_offset = 10$, $target\_offset = 15$
+    \item Last common node: $tag\_code = 23$, $source\_offset = 50$, $target\_offset = 55$
+\end{itemize}
+
+The algorithm:
+\begin{enumerate}
+    \item Starts traversal at offset 10 (source) and 15 (target)
+    \item Maps each position forward: $(10,15), (11,16), (12,17), \ldots$
+    \item Stops when reaching offset 50 (source) or encountering $tag\_code > 23$
+    \item Returns mapping for all positions in $[s_{start}, s_{end}]$ within this range
+\end{enumerate}
+
+\end{document}

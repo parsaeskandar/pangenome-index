@@ -36,3 +36,81 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Test harness: local virtualenvs and built fixture index sets
+.venv-test312/
+.pytest_cache/
+tests/fixtures/*/
+
+# ---------------------------------------------------------------------------
+# Index / graph / data artifacts — large binaries, never commit.
+# (.gitignore only affects UNtracked files, so already-committed test inputs
+#  under test_data/ are unaffected.)
+# ---------------------------------------------------------------------------
+*.tags
+*.stags
+*.tag
+*.ri
+*.rl_bwt
+*.gbz
+*.gbwt
+*.xg
+*.vg
+*.gfa
+*.t1
+*.t2
+*.index
+*.pai
+*.iv
+*.gg
+*.dot
+# index-build intermediates with no extension
+*_info
+*_contigs
+temp.*
+
+# ---------------------------------------------------------------------------
+# Compiled tool / test binaries
+# ---------------------------------------------------------------------------
+/bin/
+liftover_ext
+/tests/test_bplus_tree
+/tests/test_rindex
+/tests/test_surject_anchor_builder
+/tests/benchmark_query_tags
+
+# ---------------------------------------------------------------------------
+# Presentations / rendered figures (binaries). Force-add (git add -f) if a
+# doc genuinely needs a committed figure.
+# ---------------------------------------------------------------------------
+*.pptx
+*.pdf
+*.png
+
+# ---------------------------------------------------------------------------
+# Backups, editor scratch, IDE
+# ---------------------------------------------------------------------------
+*.bak
+.vscode/
+.idea/
+
+# ---------------------------------------------------------------------------
+# Scratch / junk dirs + files
+# ---------------------------------------------------------------------------
+junks/
+Untitled
+pathed_test/
+/read.txt
+*.i
+
+# Ad-hoc test_data inputs (contig lists / scratch) — not tracked
+test_data/*.txt
+test_data/**/*.txt
+test_data/two_contig_graph/contigs_XY.
+
+# ---------------------------------------------------------------------------
+# The vg fork is its OWN independent git repo living in this tree — commit its
+# changes there, never into this repo. Plus Claude worktrees/session data.
+# ---------------------------------------------------------------------------
+/Giraffe_server/
+/.claude/
