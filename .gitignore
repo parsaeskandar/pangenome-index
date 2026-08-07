@@ -108,6 +108,11 @@ test_data/*.txt
 test_data/**/*.txt
 test_data/two_contig_graph/contigs_XY.
 
+# Small committed test-fixture graph (34K, 44 haplotypes). Its indexes are NOT
+# committed — they're built on demand into tests/fixtures/chrM/ (ignored above)
+# by tests/python/conftest.py. Negation re-includes just this one graph.
+!test_data/chrM/chrM.gbz
+
 # ---------------------------------------------------------------------------
 # The vg fork is its OWN independent git repo living in this tree — commit its
 # changes there, never into this repo. Plus Claude worktrees/session data.

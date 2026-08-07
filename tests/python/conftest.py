@@ -26,6 +26,10 @@ import os
 import sys
 from pathlib import Path
 
+import shutil
+import subprocess
+from typing import Optional
+
 import pytest
 
 # Repo root = two levels up from this file (tests/python/conftest.py). Put it on
@@ -48,6 +52,54 @@ COORD_FILES = {
 
 DEFAULT_FIXTURE = REPO_ROOT / "coord_translation_tests" / "test0_target_loop"
 
+# The committed small real graph (34 K, 44 haplotypes, reference + accession
+# contig names). Its coordinate indexes are built ON DEMAND into this ignored
+# cache — never committed (they're large and index-format-version coupled).
+CHRM_GRAPH = REPO_ROOT / "test_data" / "chrM" / "chrM.gbz"
+CHRM_CACHE = REPO_ROOT / "tests" / "fixtures" / "chrM"        # ignored (tests/fixtures/*/)
+FIXTURE_BUILDER = REPO_ROOT / "tests" / "fixtures" / "build_fixture_indexes.sh"
+
+
+def _cache_ready(d: Path) -> bool:
+    """True if every coordinate index is present and newer than the graph."""
+    if not d.is_dir():
+        return False
+    files = [d / name for name in COORD_FILES.values()]
+    if not all(f.exists() for f in files):
+        return False
+    graph_mtime = CHRM_GRAPH.stat().st_mtime if CHRM_GRAPH.exists() else 0.0
+    return min(f.stat().st_mtime for f in files) >= graph_mtime
+
+
+def _build_tools_available() -> bool:
+    vg = os.environ.get("VG") or shutil.which("vg")
+    have_rlbwt = shutil.which("gbz_extract") and shutil.which("grlbwt-cli")
+    have_bins = (REPO_ROOT / "bin" / "build_tags").exists()
+    return bool(vg and have_rlbwt and have_bins
+                and FIXTURE_BUILDER.exists() and CHRM_GRAPH.exists())
+
+
+def _ensure_chrm_built() -> Optional[Path]:
+    """Build the chrM coordinate indexes once into the ignored cache and return
+    it, or None if the build toolchain isn't available (so callers fall back)."""
+    if _cache_ready(CHRM_CACHE):
+        return CHRM_CACHE
+    if not _build_tools_available():
+        return None
+    env = dict(os.environ)
+    env.setdefault("BIN", str(REPO_ROOT / "bin"))
+    env.setdefault("VG", shutil.which("vg") or "")
+    CHRM_CACHE.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(
+            ["bash", str(FIXTURE_BUILDER), str(CHRM_GRAPH), str(CHRM_CACHE), "--coord-only"],
+            check=True, env=env, timeout=1800,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return None
+    return CHRM_CACHE if _cache_ready(CHRM_CACHE) else None
+
 
 def pytest_configure(config):
     config.addinivalue_line(
@@ -62,8 +114,15 @@ def pytest_configure(config):
 
 
 def _fixture_dir() -> Path:
+    # Explicit override wins.
     env = os.environ.get("PANGENOME_TEST_FIXTURE")
-    return Path(env).expanduser().resolve() if env else DEFAULT_FIXTURE
+    if env:
+        return Path(env).expanduser().resolve()
+    # Otherwise use the real chrM fixture when the build toolchain is present
+    # (its indexes are built once into the ignored cache); fall back to the
+    # tiny degenerate in-repo fixture so contract tests still run everywhere.
+    built = _ensure_chrm_built()
+    return built if built is not None else DEFAULT_FIXTURE
 
 
 @pytest.fixture(scope="session")
