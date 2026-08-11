@@ -863,10 +863,27 @@ AnchorBuildPyResult Index::build_surject_anchors(
         // Name resolved, but the read shares no node with any of its subpaths.
         out.status = "no_common_nodes";
     } else {
+        // Pick the subpath the read overlaps most. We count DISTINCT covered
+        // source mappings (read nodes), not raw anchors: the multiple-candidate
+        // builder emits one anchor per target occurrence of a node, so a
+        // repeat-heavy subpath would otherwise be over-credited by raw anchor
+        // count and could beat the subpath the read truly aligns to.
+        auto covered_source_mappings = [](const panindexer::AnchorBuildResult& r) {
+            std::unordered_set<size_t> covered;
+            for (const auto& a : r.anchors) {
+                for (size_t i = a.source_mapping_begin; i < a.source_mapping_end; ++i) {
+                    covered.insert(i);
+                }
+            }
+            return covered.size();
+        };
         const panindexer::AnchorBuildResult* best = &results.front();
+        size_t best_cov = covered_source_mappings(*best);
         for (const auto& r : results) {
-            if (r.anchors.size() > best->anchors.size()) {
+            size_t cov = covered_source_mappings(r);
+            if (cov > best_cov) {
                 best = &r;
+                best_cov = cov;
             }
         }
         out.status = status_token(best->status);

@@ -23,8 +23,9 @@ LONG-READ minimizer + zipcodes to match the engine's preset.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from .giraffe_server_middleware import (
     FastqRead,
@@ -52,6 +53,59 @@ class CoordinateIndexPaths:
 AnchorBuild = Tuple[list, int, str]
 
 
+def _fold_to_intervals(raw) -> List[Dict[str, Any]]:
+    """Fold liftover_ext's per-base source→target correspondences into target
+    intervals with strand.
+
+    Each raw point (a liftover_ext.TranslatedInterval) carries:
+      - .haplotype : the full target CONTIG path it landed on (e.g. "H#2#CM09.1")
+      - .start     : the SOURCE coordinate (contig-local)
+      - .end       : the TARGET coordinate (contig-local)
+    (Its own .strand is a stubbed '+', so we ignore it and derive strand here.)
+
+    trace_coordinates_gbwt emits one point per source base, so points on a
+    colinear stretch step target by ±1. We group by target contig and split
+    each contig's points (in source order) into maximal runs of a single target
+    direction; each run becomes one interval:
+      - start/end : min/max TARGET coordinate of the run (half-open, +1 on end)
+      - strand    : '+' if target rises with source, '-' if it falls
+    A direction reversal (e.g. an inversion) or a different contig naturally
+    breaks into separate pieces — this is what yields the agreed 0..N intervals.
+    """
+    by_contig: Dict[str, List[Tuple[int, int]]] = {}
+    for p in raw:
+        by_contig.setdefault(p.haplotype, []).append((int(p.start), int(p.end)))
+
+    out: List[Dict[str, Any]] = []
+    for contig, pts in by_contig.items():
+        pts.sort()  # source ascending (ties: target ascending)
+        i, n = 0, len(pts)
+        while i < n:
+            j = i
+            direction = 0  # +1 target rising, -1 falling, 0 undecided
+            while j + 1 < n:
+                dt = pts[j + 1][1] - pts[j][1]
+                if dt == 0:
+                    j += 1  # plateau (e.g. source insertion): stay in the run
+                    continue
+                step = 1 if dt > 0 else -1
+                if direction == 0:
+                    direction = step
+                if step != direction:
+                    break  # target reversed → end this run, start a new piece
+                j += 1
+            run_targets = [t for _s, t in pts[i:j + 1]]
+            lo, hi = min(run_targets), max(run_targets)
+            out.append({
+                "haplotype": contig,
+                "start": lo,
+                "end": hi + 1,
+                "strand": "-" if direction < 0 else "+",
+            })
+            i = j + 1
+    return out
+
+
 class PangenomeMiddleware:
     """
     Unified middleware:
@@ -76,6 +130,11 @@ class PangenomeMiddleware:
             coord_paths.table1_path,
             coord_paths.table2_path,
         )
+        # Serializes coordinate-index queries: the liftover_ext query path is not
+        # guaranteed re-entrant (lazy index inits, const_cast reads), and the API
+        # can call translate concurrently with mapping. Translation is fast and
+        # low-volume, so a lock is cheap insurance.
+        self._coord_lock = threading.Lock()
         self._giraffe = GiraffeServerMiddleware(giraffe_cfg)
         self._giraffe.start()
 
@@ -152,12 +211,35 @@ class PangenomeMiddleware:
     # ------------------------------------------------------------------ #
 
     def translate(self, src_haplotype: str, start: int, end: int, tgt_haplotype: str):
-        """Translate an interval on one haplotype/contig to another."""
-        return self._coord.translate(src_haplotype, start, end, tgt_haplotype)
+        """Raw per-base source→target correspondences (liftover_ext.Index.translate).
+        Prefer translate_intervals() for the folded target-interval form."""
+        with self._coord_lock:
+            return self._coord.translate(src_haplotype, start, end, tgt_haplotype)
+
+    def translate_intervals(
+        self, src: str, start: int, end: int, tgts: Sequence[str]
+    ) -> List[Dict[str, Any]]:
+        """Translate a source contig interval to one or more target haplotypes,
+        returning folded target INTERVALS with strand.
+
+        `src` is a full contig path (coordinates live on a contig); each entry of
+        `tgts` is a target haplotype ("H#1") or contig ("H#1#chrX"). Each returned
+        dict is {haplotype (full target contig), start, end (0-based half-open),
+        strand ('+'/'-')}. Zero intervals for a target means the region does not
+        exist there. Results across targets are concatenated; each interval is
+        self-identifying via its contig name.
+        """
+        out: List[Dict[str, Any]] = []
+        with self._coord_lock:
+            for tgt in tgts:
+                raw = self._coord.translate(src, int(start), int(end), tgt)
+                out.extend(_fold_to_intervals(raw))
+        return out
 
     def get_haplotype_names(self) -> List[str]:
         """All haplotype/path names known to the coordinate index."""
-        return self._coord.get_haplotype_names()
+        with self._coord_lock:
+            return self._coord.get_haplotype_names()
 
     # ------------------------------------------------------------------ #
     # Mapping (giraffe-server)

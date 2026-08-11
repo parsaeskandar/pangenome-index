@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <deque>
 #include <limits>
 #include <stdexcept>
@@ -162,6 +163,83 @@ bool locate_target_visit(
     size_t offset_in_record = target_gbwt_visits[pick].second;
     out_edge = gbwt::edge_type(node, offset_in_record);
     return true;
+}
+
+/// Enumerate ALL of the target sequence's visits to `mapping`'s node, as
+/// (target_base_offset, gbwt::edge_type) pairs sorted ascending by base offset.
+///
+/// This is the multiple-candidate sibling of locate_target_visit(): instead of
+/// collapsing a repeated node to a single chosen occurrence (first/last), it
+/// returns every occurrence so the caller can hand them all to the Surjector,
+/// whose colinear chunk-chaining picks the occurrence the read actually came
+/// from (see extract_overlapping_paths in surjector.cpp: it starts a distinct
+/// ref chunk per step of a node). Same cheap-gate-first ordering as
+/// locate_target_visit — the GBWT decompressSA probe runs FIRST and the RLBWT
+/// find_sequences_for_tag() runs only for nodes the target actually visits.
+///
+/// Returns true (and fills out_visits) iff the target visits this node.
+bool locate_all_target_visits(
+    FastLocate& rlbwt_rindex,
+    SampledTagArray& sampled,
+    const gbwt::FastLocate& gbwt_fast_locate,
+    const SourceMapping& mapping,
+    size_t target_seq_id_fwd,
+    std::vector<std::pair<size_t, gbwt::edge_type>>& out_visits)
+{
+    out_visits.clear();
+    gbwt::node_type node = gbwt::Node::encode(mapping.node_id, mapping.is_reverse);
+
+    // 1) GBWT decompressSA gate FIRST (cheap). Collect this node's target visits
+    //    as (seqOffset, index-in-decompressSA); the index is the offset_in_record
+    //    component of gbwt::edge_type.
+    const auto _ds_t0 = std::chrono::high_resolution_clock::now();
+    std::vector<gbwt::size_type> sa_values = gbwt_fast_locate.decompressSA(node);
+    g_anchor_walk_stats.decompress_sa_ms +=
+        std::chrono::duration<double, std::milli>(
+            std::chrono::high_resolution_clock::now() - _ds_t0).count();
+    g_anchor_walk_stats.decompress_sa_calls++;
+    g_anchor_walk_stats.decompress_sa_entries += sa_values.size();
+    std::vector<std::pair<size_t, size_t>> target_gbwt_visits;
+    target_gbwt_visits.reserve(sa_values.size());
+    for (size_t i = 0; i < sa_values.size(); ++i) {
+        if (gbwt_fast_locate.seqId(sa_values[i]) == target_seq_id_fwd) {
+            target_gbwt_visits.emplace_back(
+                static_cast<size_t>(gbwt_fast_locate.seqOffset(sa_values[i])),
+                i);
+        }
+    }
+    if (target_gbwt_visits.empty()) return false;  // off-target node: cheap reject.
+    // Sort by seqOffset DESCENDING: larger GBWT seqOffset == earlier in path, so
+    // the j-th entry here pairs with the j-th SMALLEST base offset below.
+    std::sort(target_gbwt_visits.begin(), target_gbwt_visits.end(),
+              [](const std::pair<size_t, size_t>& a,
+                 const std::pair<size_t, size_t>& b) {
+                  return a.first > b.first;
+              });
+
+    // 2) RLBWT find_sequences_for_tag only now that a target visit is confirmed.
+    uint64_t tag_code = SampledTagArray::encode_value(mapping.node_id, mapping.is_reverse);
+    std::vector<NodeVisit> rlbwt_visits = find_sequences_for_tag(rlbwt_rindex, sampled, tag_code);
+    std::vector<size_t> target_base_offsets;
+    target_base_offsets.reserve(rlbwt_visits.size());
+    for (const NodeVisit& v : rlbwt_visits) {
+        if (v.seq_id == target_seq_id_fwd) {
+            target_base_offsets.push_back(v.offset);
+        }
+    }
+    if (target_base_offsets.empty()) return false;  // index disagreement; skip.
+    std::sort(target_base_offsets.begin(), target_base_offsets.end());
+
+    // 3) Pair each base offset (ascending) with its matching GBWT visit
+    //    (seqOffset descending). Emit EVERY pair as a candidate.
+    const size_t visit_count = std::min(target_base_offsets.size(),
+                                        target_gbwt_visits.size());
+    out_visits.reserve(visit_count);
+    for (size_t j = 0; j < visit_count; ++j) {
+        gbwt::edge_type edge(node, target_gbwt_visits[j].second);
+        out_visits.emplace_back(target_base_offsets[j], edge);
+    }
+    return !out_visits.empty();
 }
 
 /// Construct a gbwtgraph::GBWTGraph step_handle from a gbwt::edge_type using
@@ -411,14 +489,109 @@ std::vector<SourceMapping> make_reverse_strand_mappings(
     return out;
 }
 
+/// Multiple-candidate anchor search (DEFAULT). For each source mapping the
+/// target visits, emit ONE singleton anchor per target visit — i.e. hand the
+/// Surjector every occurrence of every read node on the target path and let its
+/// own colinear chunk-chaining pick the occurrence the read came from.
+///
+/// This replaces the "pick one occurrence (first/last) of the boundary nodes,
+/// then LF-walk the span between them" strategy. That strategy had two failure
+/// modes on repeated nodes: (1) if the read came from a LATER occurrence of the
+/// first boundary node, the chosen (earliest) occurrence sat chromosome-scale
+/// away from the true locus, so the LF walk between anchors traversed the whole
+/// intervening span (slow); and (2) the FIFO per-node pairing during that walk
+/// collapsed each node to a single occurrence, so the wrong copy could be the
+/// only one seeded. Enumerating every occurrence removes both: there is no walk
+/// (each visit's base offset comes straight from the RLBWT), and the Surjector
+/// sees all copies. The AnchorBackedPositionGraph records every anchor's step
+/// in node_target_steps_ (no dedup), so for_each_step_on_handle returns them all
+/// and Surjector::extract_overlapping_paths seeds a ref chunk per copy.
+///
+/// Returns anchors sorted by (read_begin_offset, target base offset); empty if
+/// the target shares no node with the read.
+std::vector<PrecomputedAnchor> find_anchors_all_candidates(
+    FastLocate& rlbwt_rindex,
+    SampledTagArray& sampled,
+    const gbwt::FastLocate& gbwt_fast_locate,
+    const std::vector<SourceMapping>& mappings,
+    size_t target_seq_id_fwd) {
+    std::vector<PrecomputedAnchor> anchors;
+    std::vector<std::pair<size_t, gbwt::edge_type>> visits;
+    for (size_t i = 0; i < mappings.size(); ++i) {
+        // off-target nodes (read insertions relative to the target) are rejected
+        // by the cheap decompressSA gate inside locate_all_target_visits.
+        if (!locate_all_target_visits(rlbwt_rindex, sampled, gbwt_fast_locate,
+                                      mappings[i], target_seq_id_fwd, visits)) {
+            continue;
+        }
+        for (const auto& v : visits) {
+            const size_t base_off = v.first;
+            const gbwt::edge_type& edge = v.second;
+            PrecomputedAnchor a;
+            a.source_mapping_begin = i;
+            a.source_mapping_end   = i + 1;
+            a.read_begin_offset = mappings[i].read_begin_offset;
+            a.read_end_offset   = mappings[i].read_end_offset;
+            a.path_offset_step_begin = base_off;
+            a.path_offset_step_end   = base_off;
+            a.gbwt_edge_begin = edge;
+            a.gbwt_edge_end   = edge;
+            a.step_begin = edge_to_step_handle(edge);
+            a.step_end   = edge_to_step_handle(edge);
+            anchors.push_back(a);
+        }
+    }
+    // Read order (ties broken by target position) — deterministic and what the
+    // tests / consumer expect. Multiple anchors MAY share a read range: they are
+    // alternative placements of the same read node, which is the whole point.
+    std::sort(anchors.begin(), anchors.end(),
+              [](const PrecomputedAnchor& a, const PrecomputedAnchor& b) {
+                  if (a.read_begin_offset != b.read_begin_offset)
+                      return a.read_begin_offset < b.read_begin_offset;
+                  return a.path_offset_step_begin < b.path_offset_step_begin;
+              });
+    return anchors;
+}
+
 /// Core anchor search for ONE strand. `mappings` are oriented so each node
 /// matches the target path's forward-strand traversal (the read's own mappings
 /// for a forward-strand read; make_reverse_strand_mappings()'s output for a
 /// reverse-strand read). Returns anchors sorted by read_begin_offset, or an
-/// empty vector if no common node with the target was found. This is exactly
-/// the former body of build_surject_anchors_for_path, unchanged, so the
-/// forward-strand path is byte-for-byte identical to before.
+/// empty vector if no common node with the target was found.
+///
+/// Dispatches between the default multiple-candidate search and the legacy
+/// single-occurrence-plus-LF-walk search. The walk path is retained behind the
+/// PANGENOME_SURJECT_ANCHOR_WALK env var so the two can be A/B compared on the
+/// cluster (correctness + speed) without a rebuild; unset (the default) uses the
+/// multiple-candidate search.
+std::vector<PrecomputedAnchor> find_anchors_walk(
+    const gbwtgraph::GBZ& gbz,
+    FastLocate& rlbwt_rindex,
+    SampledTagArray& sampled,
+    const gbwt::FastLocate& gbwt_fast_locate,
+    const std::vector<SourceMapping>& mappings,
+    size_t target_seq_id_fwd);
+
 std::vector<PrecomputedAnchor> find_anchors_for_strand(
+    const gbwtgraph::GBZ& gbz,
+    FastLocate& rlbwt_rindex,
+    SampledTagArray& sampled,
+    const gbwt::FastLocate& gbwt_fast_locate,
+    const std::vector<SourceMapping>& mappings,
+    size_t target_seq_id_fwd) {
+    static const bool use_walk =
+        (std::getenv("PANGENOME_SURJECT_ANCHOR_WALK") != nullptr);
+    if (use_walk) {
+        return find_anchors_walk(gbz, rlbwt_rindex, sampled, gbwt_fast_locate,
+                                 mappings, target_seq_id_fwd);
+    }
+    return find_anchors_all_candidates(rlbwt_rindex, sampled, gbwt_fast_locate,
+                                       mappings, target_seq_id_fwd);
+}
+
+/// Legacy single-occurrence + LF-walk search (see find_anchors_for_strand).
+/// This is the former body of find_anchors_for_strand, unchanged.
+std::vector<PrecomputedAnchor> find_anchors_walk(
     const gbwtgraph::GBZ& gbz,
     FastLocate& rlbwt_rindex,
     SampledTagArray& sampled,

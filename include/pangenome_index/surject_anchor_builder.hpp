@@ -12,18 +12,24 @@
  * built bdsg::ReferencePathOverlay over the target. The consumer wraps
  * these in an AnchorBackedPositionGraph and hands that to Surjector.
  *
- * Algorithm (Shape A — mirrors trace_coordinates_gbwt's pattern):
- *   1. Find one anchor by scanning source mappings forward → first one
- *      whose graph node is also visited by the target haplotype.
- *   2. Find another anchor by scanning source mappings backward → last one
- *      with a target match.
- *   3. Walk the target's GBWT path from first to last anchor via
- *      gbwt::GBWT::LF, accumulating base offsets. At each step, check
- *      whether the node is in the source's mapping set.
- *   4. Group matches into chunks (contiguous on both read and target path).
+ * Algorithm (multiple-candidate — DEFAULT):
+ *   For each source mapping the target haplotype visits, emit ONE anchor per
+ *   target occurrence of that node (a "candidate"). Where the target visits a
+ *   node several times (tandem repeat / circular contig), every occurrence is
+ *   emitted. The consumer records all of them, so the Surjector's own colinear
+ *   chunk-chaining picks the occurrence the read actually came from rather than
+ *   the builder pre-guessing one. Each occurrence's target base offset comes
+ *   straight from the RLBWT tag array, so there is NO LF walk between anchors.
  *
- * Cost per query: 2× find_sequences_for_tag + a few decompressSA + O(walk
- * distance) GBWT LF calls. No full path enumeration.
+ *   Cost per query: ≤1 find_sequences_for_tag + 1 decompressSA per target-
+ *   visited source mapping. No full path enumeration, no cross-locus walk.
+ *
+ * Legacy algorithm (single-occurrence + LF-walk — opt-in):
+ *   Set the env var PANGENOME_SURJECT_ANCHOR_WALK to use the older strategy:
+ *   pick the first/last target occurrence of the boundary nodes, then LF-walk
+ *   the target path between them pairing nodes FIFO. Retained only for A/B
+ *   comparison; on repeated boundary nodes it can walk a chromosome-scale span
+ *   and seed the wrong occurrence.
  */
 
 #include "pangenome_index/r-index.hpp"
