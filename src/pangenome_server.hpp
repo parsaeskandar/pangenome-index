@@ -115,6 +115,17 @@ public:
               int64_t start, int64_t end,
               const std::string& tgt_haplotype) const;
 
+    /// Discovery query: for a source contig interval, return the set of target
+    /// haplotype names (2-field) that have a homologous region overlapping it —
+    /// i.e. every haplotype this interval CAN be translated to. This is a pure
+    /// Table-2 overlap check (no coordinate trace), so it is much cheaper than
+    /// translating to each. Result is sorted and de-duplicated; may include the
+    /// source's own haplotype (identity homology).
+    /// Throws std::invalid_argument on a bad/oversized interval or unknown source.
+    std::vector<std::string>
+    translatable_haplotypes(const std::string& src_haplotype,
+                            int64_t start, int64_t end) const;
+
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;
 

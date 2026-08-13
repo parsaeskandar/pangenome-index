@@ -13,6 +13,8 @@ Endpoints:
   POST /api/v1/liftover       {src, start, end, tgt}   (synchronous)
       src = full contig path; tgt = haplotype or contig, or an array of them
       -> 200 {intervals:[{haplotype, start, end, strand}, ...]}   (0..N per target)
+  POST /api/v1/liftover/targets {src, start, end}   (synchronous, names only)
+      -> 200 {haplotypes:[...]}   haplotypes this source interval CAN translate to
   GET  /api/v1/haplotypes     -> 200 {haplotypes:[...]}   (2-field names)
   GET  /healthz               -> 200 {status, ready, ...load/metrics}   (no auth)
 
@@ -315,6 +317,14 @@ class Service:
             return []
         return self._mw.get_haplotype_names()
 
+    def liftover_targets(self, src: str, start: int, end: int) -> List[str]:
+        """The target haplotypes a source interval can translate to (names only)."""
+        if not self._ready:
+            raise NotReady()
+        if self._stub:
+            return []
+        return self._mw.translatable_haplotypes(src, start, end)
+
     # ---- worker ----
     def _worker(self) -> None:
         while True:
@@ -595,6 +605,46 @@ def make_handler(service: Service, cfg: ApiConfig):
 
             self._send_json(200, {"intervals": intervals})
 
+        def _handle_liftover_targets(self, payload: Dict[str, Any]) -> None:
+            src = payload.get("src")
+            start = payload.get("start")
+            end = payload.get("end")
+
+            if not isinstance(src, str) or not src:
+                service.metrics.inc("rejected_400")
+                self._error(400, "'src' must be a non-empty string (full contig path)")
+                return
+            if (not isinstance(start, int) or isinstance(start, bool) or
+                    not isinstance(end, int) or isinstance(end, bool)):
+                service.metrics.inc("rejected_400")
+                self._error(400, "'start' and 'end' must be integers")
+                return
+            if start < 0 or end < 0 or start > end:
+                service.metrics.inc("rejected_400")
+                self._error(400, f"invalid interval [{start}, {end})")
+                return
+            if end - start > MAX_LIFTOVER_SPAN:
+                service.metrics.inc("rejected_400")
+                self._error(400, f"interval length {end - start} exceeds maximum of {MAX_LIFTOVER_SPAN}")
+                return
+
+            try:
+                haplotypes = service.liftover_targets(src, start, end)
+            except NotReady:
+                service.metrics.inc("rejected_503")
+                self._error(503, "service starting; indexes not loaded yet")
+                return
+            except ValueError as exc:
+                service.metrics.inc("rejected_400")
+                self._error(400, str(exc))
+                return
+            except Exception as exc:
+                service.metrics.inc("errored")
+                self._error(500, f"liftover-targets failed: {exc}")
+                return
+
+            self._send_json(200, {"haplotypes": haplotypes})
+
         def log_message(self, fmt, *args):  # keep default request logging quiet
             return
 
@@ -638,7 +688,7 @@ def make_handler(service: Service, cfg: ApiConfig):
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
-            if path not in ("/api/v1/map", "/api/v1/liftover"):
+            if path not in ("/api/v1/map", "/api/v1/liftover", "/api/v1/liftover/targets"):
                 self._error(404, f"unknown path: {parsed.path}")
                 return
             if not self._authed():
@@ -661,6 +711,9 @@ def make_handler(service: Service, cfg: ApiConfig):
 
             if path == "/api/v1/liftover":
                 self._handle_liftover(payload)
+                return
+            if path == "/api/v1/liftover/targets":
+                self._handle_liftover_targets(payload)
                 return
 
             sequences = payload.get("sequences") or []

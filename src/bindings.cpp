@@ -101,6 +101,13 @@ PYBIND11_MODULE(liftover_ext, m) {
              "Translate coordinates from source to target haplotype.")
         .def("get_haplotype_names", &Index::get_haplotype_names,
              "Return list of valid haplotype names in the loaded index.")
+        .def("translatable_haplotypes", &Index::translatable_haplotypes,
+             py::arg("src_haplotype"),
+             py::arg("start"),
+             py::arg("end"),
+             "For a source contig interval, return the sorted list of target "
+             "haplotype names that have a homologous region overlapping it "
+             "(a Table-2 overlap check; no coordinate trace).")
         .def("build_surject_anchors",
              [](const Index& self, const std::string& gaf_str,
                 const std::string& target_haplotype) {

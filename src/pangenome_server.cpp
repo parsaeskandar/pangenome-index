@@ -464,6 +464,67 @@ Index::translate(const std::string& src_haplotype,
     return results;
 }
 
+std::vector<std::string>
+Index::translatable_haplotypes(const std::string& src_haplotype,
+                               int64_t start, int64_t end) const {
+    if (!loaded_)
+        throw std::runtime_error("Index::translatable_haplotypes called before load()");
+    if (end - start > MAX_INTERVAL_LENGTH)
+        throw std::invalid_argument(
+            "Interval length " + std::to_string(end - start) +
+            " exceeds maximum of " + std::to_string(MAX_INTERVAL_LENGTH) + " bases");
+    if (start < 0 || end < 0 || start > end)
+        throw std::invalid_argument("Invalid interval [" +
+            std::to_string(start) + ", " + std::to_string(end) + "]");
+
+    size_t s = static_cast<size_t>(start);
+    size_t e = static_cast<size_t>(end);
+
+    // Resolve the source contig/haplotype to its GBWT path(s) and map the query
+    // interval into path-local coordinates (same front half as translate()).
+    std::vector<std::string> source_path_names =
+        path_names_for_haplotype(table1_, src_haplotype);
+    if (source_path_names.empty())
+        throw std::invalid_argument(
+            "No paths found for source haplotype: " + src_haplotype);
+
+    std::vector<PathInterval> source_intervals;
+    for (const std::string& name : source_path_names) {
+        std::vector<PathInterval> pis = table1_.lookup(name, s, e + 1);
+        for (PathInterval& pi : pis)
+            source_intervals.push_back(pi);
+    }
+    if (source_intervals.empty())
+        return {};
+
+    // Candidate target haplotypes per source path come straight from T2's keys.
+    // T2 is sparse — it only stores (src_path_id, tgt_haplotype) pairs that share
+    // at least one graph node — so this is the homology-pruned candidate set, not
+    // every haplotype in the graph.
+    std::unordered_map<size_t, std::vector<std::string>> tgts_by_src;
+    for (const std::pair<size_t, std::string>& key : table2_.keys())
+        tgts_by_src[key.first].push_back(key.second);
+
+    // Confirm each candidate actually overlaps THIS interval (a binary-searched
+    // segment lookup — still no coordinate trace).
+    std::unordered_set<std::string> found;
+    for (const PathInterval& pi : source_intervals) {
+        if (pi.end <= pi.start) continue;
+        auto it = tgts_by_src.find(pi.path_id);
+        if (it == tgts_by_src.end()) continue;
+        for (const std::string& tgt : it->second) {
+            if (found.count(tgt)) continue;  // already confirmed via another segment
+            std::vector<TargetInterval> hits =
+                table2_.lookup(pi.path_id, tgt, pi.start, pi.end);
+            if (!hits.empty()) found.insert(tgt);
+        }
+    }
+
+    std::vector<std::string> out(found.begin(), found.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 // ── GAF parsing helpers ──────────────────────────────────────────────────
 
 namespace {

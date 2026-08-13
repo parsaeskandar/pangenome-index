@@ -236,6 +236,27 @@ class PangenomeMiddleware:
                 out.extend(_fold_to_intervals(raw))
         return out
 
+    def translatable_haplotypes(self, src: str, start: int, end: int) -> List[str]:
+        """Discovery: the target haplotypes a source contig interval CAN translate
+        to (names only, no coordinates).
+
+        Uses the native liftover_ext.Index.translatable_haplotypes (a cheap
+        Table-2 overlap check) when the loaded extension provides it. Falls back
+        to probing every haplotype with translate() when it doesn't — correct but
+        heavier — so this works before the extension is rebuilt and upgrades to
+        the fast path automatically once it is.
+        """
+        with self._coord_lock:
+            native = getattr(self._coord, "translatable_haplotypes", None)
+            if native is not None:
+                return list(native(src, int(start), int(end)))
+            # Fallback: a haplotype is reachable iff translate() yields anything.
+            names = self._coord.get_haplotype_names()
+            out = [h for h in names
+                   if self._coord.translate(src, int(start), int(end), h)]
+            out.sort()
+            return out
+
     def get_haplotype_names(self) -> List[str]:
         """All haplotype/path names known to the coordinate index."""
         with self._coord_lock:
