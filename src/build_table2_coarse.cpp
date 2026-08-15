@@ -98,6 +98,11 @@ void usage(const char* prog) {
         << "  --threads N     worker threads (default: all)\n"
         << "  --bin-size N    coverage granularity in bp (default 10000)\n"
         << "  --merge-gap N   merge runs separated by <= N bp (default 100000)\n"
+        << "  --min-run-bp N  drop runs shorter than N bp (default 0 = keep all).\n"
+        << "                  Repeats make distant haplotypes share short stretches;\n"
+        << "                  raising this cuts spurious pairs and build time sharply.\n"
+        << "  --max-paths N   process only the first N source paths (throughput probe)\n"
+        << "  --progress-every N  progress line every N paths (default 1000000)\n"
         << "  --progress      per-phase progress to stderr\n";
 }
 
@@ -135,6 +140,9 @@ int main(int argc, char** argv) {
     int threads = 0;
     size_t bin_size = 10000;
     size_t merge_gap = 100000;
+    size_t min_run_bp = 0;
+    size_t max_paths = 0;
+    size_t progress_every = 1000000;
     bool progress = false;
 
     {
@@ -145,6 +153,9 @@ int main(int argc, char** argv) {
             else if (a == "--threads" && i + 1 < argc) threads = std::stoi(argv[++i]);
             else if (a == "--bin-size" && i + 1 < argc) bin_size = std::stoull(argv[++i]);
             else if (a == "--merge-gap" && i + 1 < argc) merge_gap = std::stoull(argv[++i]);
+            else if (a == "--min-run-bp" && i + 1 < argc) min_run_bp = std::stoull(argv[++i]);
+            else if (a == "--max-paths" && i + 1 < argc) max_paths = std::stoull(argv[++i]);
+            else if (a == "--progress-every" && i + 1 < argc) progress_every = std::stoull(argv[++i]);
             else if (a == "--progress") progress = true;
             else if (!a.empty() && a[0] == '-') { usage(argv[0]); return 1; }
             else pos.push_back(a);
@@ -249,15 +260,36 @@ int main(int argc, char** argv) {
             }
         }
         if (progress) {
-            size_t d = ++paths_done;
-            if (d % 512 == 0) {
+            const size_t d = ++paths_done;
+            if (d % progress_every == 0) {
+                const double el = secs(t_a, clk::now());
                 #pragma omp critical
-                std::cerr << "    A: " << with_commas(d) << "/" << with_commas(n_paths)
-                          << " paths\r" << std::flush;
+                std::cerr << "  A " << with_commas(d) << "/" << with_commas(n_paths)
+                          << " paths  " << std::fixed << std::setprecision(0) << el << "s  "
+                          << with_commas(static_cast<unsigned long long>(d / (el > 0 ? el : 1)))
+                          << "/s" << std::endl;
             }
         }
     }
     std::cerr << "  phase A in " << secs(t_a, clk::now()) << "s" << std::endl;
+
+    // Node length lookup. Phase B needs a base offset for every node it walks;
+    // going through get_handle()/get_length() did that twice per node and was a
+    // large part of the per-node cost. One dense array replaces both calls, and
+    // it is reused by every source path.
+    std::cerr << "Node lengths ("
+              << human_bytes(static_cast<double>(max_node + 1) * 4.0) << ") ..." << std::endl;
+    std::vector<uint32_t> node_len(max_node + 1, 0);
+    {
+        auto t_len = clk::now();
+        #pragma omp parallel for schedule(static)
+        for (size_t nid = 1; nid <= max_node; ++nid) {
+            if (!gbz.graph.has_node(static_cast<handlegraph::nid_t>(nid))) continue;
+            node_len[nid] = static_cast<uint32_t>(
+                gbz.graph.get_length(gbz.graph.get_handle(static_cast<handlegraph::nid_t>(nid), false)));
+        }
+        std::cerr << "  node lengths in " << secs(t_len, clk::now()) << "s" << std::endl;
+    }
 
     // ----------------------------- Phases B+C: coverage bins -> merged runs
     auto t_b = clk::now();
@@ -273,6 +305,13 @@ int main(int argc, char** argv) {
 
     std::atomic<size_t> src_done{0};
     std::atomic<size_t> probe_failures{0};
+    std::atomic<size_t> probes_done{0};
+    std::atomic<size_t> runs_dropped{0};
+    const size_t n_src = (max_paths > 0 && max_paths < n_paths) ? max_paths : n_paths;
+    if (n_src != n_paths) {
+        std::cerr << "  (limited to the first " << with_commas(n_src)
+                  << " source paths by --max-paths)" << std::endl;
+    }
 
     #pragma omp parallel
     {
@@ -282,62 +321,136 @@ int main(int argc, char** argv) {
         std::vector<Row>& out = per_thread[0];
 #endif
         std::vector<uint64_t> bins;
-        std::vector<size_t> first_node_of_bin;
-        std::vector<gbwt::node_type> nodes;
-        // Per-haplotype open run state for the XOR delta scan.
-        std::vector<size_t> run_start(H, 0);
-        std::vector<char> run_open(H, 0);
-        std::vector<std::pair<size_t, size_t>> runs;   // (bin_begin, bin_end_exclusive)
+        // First GBWT node seen in each bin, used to resolve the target path id.
+        // Storing the node itself (not an index) means the path's node list does
+        // not have to be materialised at all.
+        std::vector<gbwt::node_type> first_node_of_bin;
 
-        #pragma omp for schedule(dynamic, 4)
-        for (size_t sp = 0; sp < n_paths; ++sp) {
+        // Per-haplotype run state. Flat arrays reused across paths: the previous
+        // version built an unordered_map of vectors per path, which allocated
+        // heavily because repeats make distant haplotypes flicker in and out of
+        // coverage, producing very many short raw runs.
+        std::vector<size_t> run_start(H, 0), run_last(H, 0);
+        std::vector<char>   run_open(H, 0);
+
+        // Target-path probe cache. decompressSA() is the single most expensive
+        // call here, and it used to run once per emitted run. Runs of the same
+        // haplotype that are close together on this source path resolve to the
+        // same target contig, so one probe serves all of them; runs further
+        // apart than the merge gap still probe again, so a source path spanning
+        // several contigs of the same haplotype stays correct.
+        std::vector<size_t>   probe_tgt(H, 0);
+        std::vector<uint64_t> probe_stamp(H, 0);
+        std::vector<size_t>   probe_last_bin(H, 0);
+        uint64_t stamp = 0;
+
+        #pragma omp for schedule(dynamic, 1)
+        for (size_t sp = 0; sp < n_src; ++sp) {
             const uint32_t src_hap = path_hap[sp];
+            ++stamp;
 
+            // ---- Phase B: one pass. Bin coverage and accumulate base offsets
+            // together, with no copy of the node list and one length lookup.
             gbwt::vector_type ext = index.extract(gbwt::Path::encode(sp, false));
-            nodes.clear();
-            nodes.reserve(ext.size());
-            size_t path_len = 0;
+            bins.clear();
+            first_node_of_bin.clear();
+            size_t off = 0;
             for (gbwt::node_type node : ext) {
                 if (node == gbwt::ENDMARKER) break;
-                nodes.push_back(node);
-                path_len += gbz.graph.get_length(gbz.graph.get_handle(
-                    gbwt::Node::id(node), gbwt::Node::is_reverse(node)));
-            }
-            if (nodes.empty() || path_len == 0) continue;
-
-            const size_t nbins = path_len / bin_size + 1;
-            bins.assign(nbins * WORDS, 0);
-            first_node_of_bin.assign(nbins, static_cast<size_t>(-1));
-
-            // Phase B: OR each node's haplotype mask into its bin.
-            {
-                size_t off = 0;
-                for (size_t k = 0; k < nodes.size(); ++k) {
-                    const size_t nid = static_cast<size_t>(gbwt::Node::id(nodes[k]));
-                    const size_t b = off / bin_size;
-                    if (b < nbins) {
-                        if (first_node_of_bin[b] == static_cast<size_t>(-1)) {
-                            first_node_of_bin[b] = k;
-                        }
-                        if (nid <= max_node) {
-                            const uint64_t* src = &nodemask[nid * WORDS];
-                            uint64_t* dst = &bins[b * WORDS];
-                            for (size_t w = 0; w < WORDS; ++w) dst[w] |= src[w];
-                        }
-                    }
-                    off += gbz.graph.get_length(gbz.graph.get_handle(
-                        gbwt::Node::id(nodes[k]), gbwt::Node::is_reverse(nodes[k])));
+                const size_t nid = static_cast<size_t>(gbwt::Node::id(node));
+                const size_t b = off / bin_size;
+                if (b >= first_node_of_bin.size()) {
+                    first_node_of_bin.resize(b + 1, gbwt::ENDMARKER);
+                    bins.resize((b + 1) * WORDS, 0);
+                }
+                if (first_node_of_bin[b] == gbwt::ENDMARKER) first_node_of_bin[b] = node;
+                if (nid <= max_node) {
+                    const uint64_t* src = &nodemask[nid * WORDS];
+                    uint64_t* dst = &bins[b * WORDS];
+                    for (size_t w = 0; w < WORDS; ++w) dst[w] |= src[w];
+                    off += node_len[nid];
                 }
             }
+            const size_t path_len = off;
+            const size_t nbins = first_node_of_bin.size();
+            if (nbins == 0 || path_len == 0) {
+                if (progress) {
+                    const size_t d = ++src_done;
+                    if (d % progress_every == 0) {
+                        const double el = secs(t_b, clk::now());
+                        #pragma omp critical
+                        std::cerr << "  B/C " << with_commas(d) << "/" << with_commas(n_src)
+                                  << " paths  " << std::fixed << std::setprecision(0) << el << "s"
+                                  << std::endl;
+                    }
+                }
+                continue;
+            }
 
-            // Phase C: per-haplotype runs via XOR delta between adjacent bins.
-            // Presence changes rarely, so this costs bins*WORDS rather than
-            // bins*haplotypes.
+            // Emit one merged run, resolving its target path id (cached).
+            auto emit_run = [&](uint32_t h, size_t b0, size_t b1) {   // b1 inclusive
+                if (h == src_hap) return;          // T2 skips same-haplotype pairs
+                if (b1 < b0) return;
+                const size_t src_start = b0 * bin_size;
+                size_t src_end = (b1 + 1) * bin_size;
+                if (src_end > path_len) src_end = path_len;
+                if (src_end <= src_start) return;
+                // Filter on actual span, not bin count: a run can occupy two bins
+                // yet be far shorter than the threshold.
+                if (src_end - src_start < min_run_bp) { ++runs_dropped; return; }
+
+                size_t tgt = 0;
+                bool have = false;
+                if (probe_stamp[h] == stamp &&
+                    b0 <= probe_last_bin[h] + merge_gap_bins + 1) {
+                    tgt = probe_tgt[h];
+                    have = true;
+                } else {
+                    for (size_t b = b0; b <= b1 && !have; ++b) {
+                        const gbwt::node_type gn0 = first_node_of_bin[b];
+                        if (gn0 == gbwt::ENDMARKER) continue;
+                        const size_t nid = static_cast<size_t>(gbwt::Node::id(gn0));
+                        if (nid > max_node) continue;
+                        if ((nodemask[nid * WORDS + h / 64] & (1ULL << (h % 64))) == 0) {
+                            continue;   // this bin's first node is not on h
+                        }
+                        for (int orient = 0; orient < 2 && !have; ++orient) {
+                            gbwt::node_type gn = gbwt::Node::encode(
+                                static_cast<gbwt::size_type>(nid), orient == 1);
+                            std::vector<gbwt::size_type> sa = rindex.decompressSA(gn);
+                            ++probes_done;
+                            for (gbwt::size_type v : sa) {
+                                const size_t pid =
+                                    static_cast<size_t>(rindex.seqId(v)) / 2;
+                                if (pid < n_paths && path_hap[pid] == h) {
+                                    tgt = pid; have = true; break;
+                                }
+                            }
+                        }
+                    }
+                    if (have) {
+                        probe_stamp[h] = stamp;
+                        probe_tgt[h] = tgt;
+                    }
+                }
+                if (!have) { ++probe_failures; return; }
+                probe_last_bin[h] = b1;
+
+                Row row;
+                row.src_path_id = sp;
+                row.tgt_hap = h;
+                row.mapping.src_start = src_start;
+                row.mapping.src_end = src_end;
+                row.mapping.tgt_path_id = tgt;
+                out.push_back(row);
+            };
+
+            // ---- Phase C: runs found by XOR delta between adjacent bins, with
+            // gap merging applied inline so no intermediate run list is built.
             std::fill(run_open.begin(), run_open.end(), 0);
-            std::unordered_map<uint32_t, std::vector<std::pair<size_t, size_t>>> raw;
             for (size_t b = 0; b < nbins; ++b) {
                 for (size_t w = 0; w < WORDS; ++w) {
-                    const uint64_t cur = bins[b * WORDS + w];
+                    const uint64_t cur  = bins[b * WORDS + w];
                     const uint64_t prev = (b == 0) ? 0ULL : bins[(b - 1) * WORDS + w];
                     uint64_t diff = cur ^ prev;
                     while (diff) {
@@ -345,100 +458,46 @@ int main(int argc, char** argv) {
                         diff &= diff - 1;
                         const uint32_t h = static_cast<uint32_t>(w * 64 + t);
                         if (h >= H) continue;
-                        if (cur & (1ULL << t)) {
-                            run_start[h] = b;
-                            run_open[h] = 1;
-                        } else if (run_open[h]) {
-                            raw[h].emplace_back(run_start[h], b);
-                            run_open[h] = 0;
-                        }
-                    }
-                }
-            }
-            // Close runs still open at the end of the path.
-            for (size_t w = 0; w < WORDS; ++w) {
-                uint64_t cur = bins[(nbins - 1) * WORDS + w];
-                while (cur) {
-                    const int t = __builtin_ctzll(cur);
-                    cur &= cur - 1;
-                    const uint32_t h = static_cast<uint32_t>(w * 64 + t);
-                    if (h < H && run_open[h]) {
-                        raw[h].emplace_back(run_start[h], nbins);
-                        run_open[h] = 0;
-                    }
-                }
-            }
-
-            // Merge runs separated by a small gap, then emit one row each.
-            for (auto& kv : raw) {
-                const uint32_t h = kv.first;
-                if (h == src_hap) continue;          // T2 skips same-haplotype pairs
-                auto& r = kv.second;
-                if (r.empty()) continue;
-                std::sort(r.begin(), r.end());
-                runs.clear();
-                runs.push_back(r[0]);
-                for (size_t i = 1; i < r.size(); ++i) {
-                    if (r[i].first <= runs.back().second + merge_gap_bins) {
-                        runs.back().second = std::max(runs.back().second, r[i].second);
-                    } else {
-                        runs.push_back(r[i]);
-                    }
-                }
-
-                for (const auto& run : runs) {
-                    const size_t src_start = run.first * bin_size;
-                    size_t src_end = run.second * bin_size;
-                    if (src_end > path_len || run.second >= nbins) src_end = path_len;
-                    if (src_end <= src_start) continue;
-
-                    // Resolve which path of haplotype h this run reaches: find a
-                    // node in the run that h actually visits, then read the
-                    // sequence ids off that node. One probe per emitted run.
-                    size_t tgt_path_id = 0;
-                    bool resolved = false;
-                    for (size_t b = run.first; b < run.second && !resolved; ++b) {
-                        size_t k = (b < nbins) ? first_node_of_bin[b] : static_cast<size_t>(-1);
-                        if (k == static_cast<size_t>(-1)) continue;
-                        const size_t nid = static_cast<size_t>(gbwt::Node::id(nodes[k]));
-                        if (nid > max_node) continue;
-                        if ((nodemask[nid * WORDS + h / 64] & (1ULL << (h % 64))) == 0) {
-                            continue;   // h not on this node; try the next bin
-                        }
-                        // h visits this node — in either orientation.
-                        for (int orient = 0; orient < 2 && !resolved; ++orient) {
-                            gbwt::node_type gn = gbwt::Node::encode(
-                                static_cast<gbwt::size_type>(nid), orient == 1);
-                            std::vector<gbwt::size_type> sa = rindex.decompressSA(gn);
-                            for (gbwt::size_type v : sa) {
-                                const size_t seq = static_cast<size_t>(rindex.seqId(v));
-                                const size_t pid = seq / 2;
-                                if (pid < n_paths && path_hap[pid] == h) {
-                                    tgt_path_id = pid;
-                                    resolved = true;
-                                    break;
-                                }
+                        if (cur & (1ULL << t)) {           // coverage starts
+                            if (run_open[h] && b - run_last[h] - 1 <= merge_gap_bins) {
+                                // close enough to the previous stretch: same run
+                            } else {
+                                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
+                                run_start[h] = b;
                             }
+                            run_open[h] = 1;
+                            run_last[h] = b;
+                        } else if (run_open[h]) {          // coverage stops
+                            run_last[h] = b - 1;
                         }
                     }
-                    if (!resolved) { ++probe_failures; continue; }
-
-                    Row row;
-                    row.src_path_id = sp;
-                    row.tgt_hap = h;
-                    row.mapping.src_start = src_start;
-                    row.mapping.src_end = src_end;
-                    row.mapping.tgt_path_id = tgt_path_id;
-                    out.push_back(row);
                 }
+            }
+            // Haplotypes still covered in the final bin run to the path end.
+            for (size_t w = 0; w < WORDS; ++w) {
+                uint64_t bits = bins[(nbins - 1) * WORDS + w];
+                while (bits) {
+                    const int t = __builtin_ctzll(bits);
+                    bits &= bits - 1;
+                    const uint32_t h = static_cast<uint32_t>(w * 64 + t);
+                    if (h < H && run_open[h]) run_last[h] = nbins - 1;
+                }
+            }
+            for (uint32_t h = 0; h < H; ++h) {
+                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
             }
 
             if (progress) {
-                size_t d = ++src_done;
-                if (d % 256 == 0) {
+                const size_t d = ++src_done;
+                if (d % progress_every == 0) {
+                    const double el = secs(t_b, clk::now());
+                    const double rate = (el > 0) ? static_cast<double>(d) / el : 0.0;
+                    const double eta = (rate > 0) ? (n_src - d) / rate : 0.0;
                     #pragma omp critical
-                    std::cerr << "    B/C: " << with_commas(d) << "/" << with_commas(n_paths)
-                              << " paths\r" << std::flush;
+                    std::cerr << "  B/C " << with_commas(d) << "/" << with_commas(n_src)
+                              << " paths  " << std::fixed << std::setprecision(0)
+                              << el << "s elapsed  eta " << eta << "s  "
+                              << with_commas(probes_done.load()) << " probes" << std::endl;
                 }
             }
         }

@@ -159,6 +159,23 @@ public:
     haplotype_coverage(const std::string& gaf_str, double min_coverage = 0.0,
                        bool include_zero = false) const;
 
+    /// Coordinate translation WITHOUT Table 2.
+    ///
+    /// Table 2 exists only to route a source interval to candidate target paths
+    /// and to narrow the trace extent. This finds the candidates directly: it
+    /// walks inward from both ends of the source interval until it meets a node
+    /// the target haplotype also visits (the first and last common nodes), then
+    /// runs the same GBWT trace. Nothing is precomputed per path pair, so it is
+    /// unaffected by how finely the graph fragments haplotypes into GBWT paths.
+    ///
+    /// Selected at runtime by setting PANGENOME_TRANSLATE_NO_T2=1, which makes
+    /// translate() delegate here; PANGENOME_TRANSLATE_PROBE_CAP bounds how many
+    /// nodes are probed from each end before giving up (default 256).
+    std::vector<TranslatedInterval>
+    translate_no_table2(const std::string& src_haplotype,
+                        int64_t start, int64_t end,
+                        const std::string& tgt_haplotype) const;
+
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;
 

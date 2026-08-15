@@ -115,6 +115,12 @@ PYBIND11_MODULE(liftover_ext, m) {
              py::arg("end"),
              py::arg("tgt_haplotype"),
              "Translate coordinates from source to target haplotype.")
+        .def("translate_no_table2", &Index::translate_no_table2,
+             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::arg("tgt_haplotype"),
+             "Translate without Table 2: candidate target paths are found by "
+             "walking to the first/last common node through the GBWT/tag array. "
+             "translate() uses this automatically when PANGENOME_TRANSLATE_NO_T2 is set.")
         .def("get_haplotype_names", &Index::get_haplotype_names,
              "Return list of valid haplotype names in the loaded index.")
         .def("haplotype_coverage", &Index::haplotype_coverage,

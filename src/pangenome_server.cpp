@@ -106,6 +106,19 @@ extern std::vector<TagInfo> find_tags_in_interval(
     size_t target_seq_id,
     FindTagsInIntervalTiming* out_timing);
 
+// File-scope (not inside a namespace) so the extern matches the definition in
+// coordinate_translation.cpp, per the same convention as the structs above.
+struct NodeVisit {
+    size_t seq_id;
+    size_t offset;
+    size_t bwt_pos;
+    size_t packed_pos;
+    uint64_t tag_code;
+};
+
+extern std::vector<NodeVisit> find_sequences_for_tag(
+    FastLocate& r_index, SampledTagArray& sampled, uint64_t tag_code);
+
 extern CommonNodes find_first_and_last_common_nodes_gbwt(
     const gbwt::FastLocate& gbwt_fast_locate,
     FastLocate& rlbwt_rindex,
@@ -282,11 +295,218 @@ void Index::load(const std::string& gbz_path,
 }
 
 std::vector<TranslatedInterval>
+Index::translate_no_table2(const std::string& src_haplotype,
+                           int64_t start, int64_t end,
+                           const std::string& tgt_haplotype) const {
+    if (!loaded_)
+        throw std::runtime_error("Index::translate_no_table2 called before load()");
+    if (end - start > MAX_INTERVAL_LENGTH)
+        throw std::invalid_argument(
+            "Interval length " + std::to_string(end - start) +
+            " exceeds maximum of " + std::to_string(MAX_INTERVAL_LENGTH) + " bases");
+    if (start < 0 || end < 0 || start > end)
+        throw std::invalid_argument("Invalid interval [" +
+            std::to_string(start) + ", " + std::to_string(end) + "]");
+
+    // How many nodes to probe from each end of the source interval before
+    // concluding the target is not present. A homologous target is normally hit
+    // on the first probe; the cap only bounds the cost of a query whose target
+    // genuinely shares nothing here.
+    static const size_t probe_cap = []() -> size_t {
+        const char* e = std::getenv("PANGENOME_TRANSLATE_PROBE_CAP");
+        if (e) { long v = std::atol(e); if (v > 0) return static_cast<size_t>(v); }
+        return 256;
+    }();
+
+    // Target may be a haplotype ("HG002#1") or a full contig ("HG002#1#chr1").
+    std::string tgt_key = tgt_haplotype, tgt_contig_filter;
+    {
+        size_t h1 = tgt_haplotype.find('#');
+        if (h1 != std::string::npos) {
+            size_t h2 = tgt_haplotype.find('#', h1 + 1);
+            if (h2 != std::string::npos) {
+                tgt_key = tgt_haplotype.substr(0, h2);
+                tgt_contig_filter = tgt_haplotype;
+            }
+        }
+    }
+    // Split the two-field key so candidate paths can be tested against GBWT
+    // metadata directly — with hundreds of millions of path fragments, listing
+    // a haplotype's paths up front is not an option.
+    std::string tgt_sample = tgt_key;
+    unsigned tgt_phase = 0;
+    {
+        size_t h = tgt_key.rfind('#');
+        if (h != std::string::npos) {
+            tgt_sample = tgt_key.substr(0, h);
+            tgt_phase = static_cast<unsigned>(std::atoi(tgt_key.c_str() + h + 1));
+        }
+    }
+    const gbwt::GBWT& gbwt_index = gbz_->index;
+    const bool have_meta = gbwt_index.hasMetadata() &&
+                           gbwt_index.metadata.hasPathNames() &&
+                           gbwt_index.metadata.hasSampleNames();
+    if (!have_meta)
+        throw std::runtime_error("translate_no_table2 requires GBWT path/sample metadata");
+
+    auto path_is_target = [&](size_t pid) -> bool {
+        if (pid >= gbwt_index.metadata.paths()) return false;
+        gbwt::PathName pn = gbwt_index.metadata.path(pid);
+        if (static_cast<unsigned>(pn.phase) != tgt_phase) return false;
+        if (gbwt_index.metadata.sample(pn.sample) != tgt_sample) return false;
+        if (!tgt_contig_filter.empty()) {
+            auto itn = path_to_global_.find(pid);
+            if (itn == path_to_global_.end() ||
+                itn->second.first != tgt_contig_filter) return false;
+        }
+        return true;
+    };
+
+    FastLocate& rindex = const_cast<FastLocate&>(rlbwt_rindex_);
+    SampledTagArray& sampled = const_cast<SampledTagArray&>(sampled_);
+    const gbwt::GBWT* gbwt_index_ptr = &gbz_->index;
+    const gbwtgraph::GBWTGraph& graph = gbz_->graph;
+
+    std::vector<std::string> source_path_names =
+        path_names_for_haplotype(table1_, src_haplotype);
+    if (source_path_names.empty())
+        throw std::invalid_argument(
+            "No paths found for source haplotype: " + src_haplotype);
+
+    std::vector<PathInterval> source_intervals;
+    for (const std::string& name : source_path_names) {
+        for (PathInterval& pi : table1_.lookup(name,
+                                               static_cast<size_t>(start),
+                                               static_cast<size_t>(end) + 1)) {
+            source_intervals.push_back(pi);
+        }
+    }
+    if (source_intervals.empty()) return {};
+
+    struct HaplotypeTranslation {
+        size_t source_haplotype_offset = 0;
+        size_t target_haplotype_offset = 0;
+        size_t target_path_id = 0;
+    };
+    std::vector<HaplotypeTranslation> all_raw;
+
+    for (const PathInterval& pi : source_intervals) {
+        const size_t src_path_id = pi.path_id;
+        const size_t local_start = pi.start;
+        const size_t local_end = pi.end;
+        if (local_end <= local_start) continue;
+        const size_t src_seq_id = 2 * src_path_id;
+
+        auto it_src = path_to_global_.find(src_path_id);
+        if (it_src == path_to_global_.end()) continue;
+        const size_t src_subpath_start = it_src->second.second;
+
+        const size_t seq_start_incl = local_start;
+        const size_t seq_end_incl = local_end - 1;
+
+        // 1) Nodes the source visits in this interval, unscoped by target.
+        std::vector<TagInfo> all_tags = find_tags_in_interval(
+            rindex, sampled, src_seq_id, seq_start_incl, seq_end_incl,
+            gbwt_index_ptr, gbwt_rindex_.get(), &graph,
+            std::numeric_limits<size_t>::max(), nullptr);
+        if (all_tags.empty()) continue;
+
+        // 2) Walk inward from both ends until a node the target also visits.
+        //    find_tags_in_interval returns tags sorted by source offset, so the
+        //    first hit going forward is the first common node and the first hit
+        //    going backward is the last common node. Their target paths are the
+        //    only candidates worth tracing — no table, no path enumeration.
+        std::unordered_set<size_t> candidates;
+        auto probe_tag = [&](const TagInfo& tag) -> bool {
+            for (const NodeVisit& v : find_sequences_for_tag(rindex, sampled, tag.tag_code)) {
+                const size_t pid = v.seq_id / 2;
+                if (path_is_target(pid)) { candidates.insert(pid); return true; }
+            }
+            return false;
+        };
+        for (size_t i = 0, probed = 0; i < all_tags.size() && probed < probe_cap; ++i, ++probed) {
+            if (probe_tag(all_tags[i])) break;
+        }
+        for (size_t i = all_tags.size(), probed = 0; i-- > 0 && probed < probe_cap; ++probed) {
+            if (probe_tag(all_tags[i])) break;
+        }
+        if (candidates.empty()) continue;   // target shares nothing here
+
+        // 3) Trace each candidate with the standard pipeline. The extent is the
+        //    whole query interval: without Table 2 there is no precomputed
+        //    homologous sub-range to narrow it to, and the common-node search
+        //    below keeps only what source and target actually share.
+        for (size_t tgt_path_id : candidates) {
+            const size_t tgt_seq_id = 2 * tgt_path_id;
+
+            std::vector<TagInfo> tags = find_tags_in_interval(
+                rindex, sampled, src_seq_id, seq_start_incl, seq_end_incl,
+                gbwt_index_ptr, gbwt_rindex_.get(), &graph, tgt_seq_id, nullptr);
+            if (tags.empty()) continue;
+
+            CommonNodes common = find_first_and_last_common_nodes_gbwt(
+                *gbwt_rindex_, rindex, sampled, tags, src_seq_id, tgt_seq_id);
+            if (!common.found) continue;
+
+            std::vector<TranslationResult> trans = trace_coordinates_gbwt(
+                *gbwt_index_ptr, *gbwt_rindex_, graph,
+                src_seq_id, seq_start_incl, seq_end_incl, tgt_seq_id,
+                common.first_source_offset, common.first_target_offset,
+                common.first_source_base, common.first_target_base,
+                common.first_tag_code,
+                common.last_source_base, common.last_target_base,
+                common.last_tag_code);
+
+            auto it_tgt = path_to_global_.find(tgt_path_id);
+            if (it_tgt == path_to_global_.end()) continue;
+            const size_t tgt_subpath_start = it_tgt->second.second;
+
+            for (const TranslationResult& tr : trans) {
+                if (tr.target_offset == 0) continue;
+                HaplotypeTranslation ht;
+                ht.source_haplotype_offset = src_subpath_start + tr.source_offset;
+                ht.target_haplotype_offset = tgt_subpath_start + tr.target_offset;
+                ht.target_path_id = tgt_path_id;
+                all_raw.push_back(ht);
+            }
+        }
+    }
+
+    std::sort(all_raw.begin(), all_raw.end(),
+              [](const HaplotypeTranslation& a, const HaplotypeTranslation& b) {
+                  if (a.source_haplotype_offset != b.source_haplotype_offset)
+                      return a.source_haplotype_offset < b.source_haplotype_offset;
+                  return a.target_haplotype_offset < b.target_haplotype_offset;
+              });
+
+    std::vector<TranslatedInterval> results;
+    results.reserve(all_raw.size());
+    for (const HaplotypeTranslation& ht : all_raw) {
+        TranslatedInterval ti;
+        auto it_name = path_to_global_.find(ht.target_path_id);
+        ti.haplotype = (it_name != path_to_global_.end()) ? it_name->second.first
+                                                          : tgt_haplotype;
+        ti.start = static_cast<int64_t>(ht.source_haplotype_offset);
+        ti.end   = static_cast<int64_t>(ht.target_haplotype_offset);
+        ti.strand = '+';
+        results.push_back(ti);
+    }
+    return results;
+}
+
+std::vector<TranslatedInterval>
 Index::translate(const std::string& src_haplotype,
                  int64_t start, int64_t end,
                  const std::string& tgt_haplotype) const {
     if (!loaded_)
         throw std::runtime_error("Index::translate called before load()");
+
+    // Opt-in table-free path: routes via first/last common node found through
+    // the GBWT/tag array instead of Table 2. Set PANGENOME_TRANSLATE_NO_T2=1.
+    static const bool no_t2 = (std::getenv("PANGENOME_TRANSLATE_NO_T2") != nullptr);
+    if (no_t2) {
+        return translate_no_table2(src_haplotype, start, end, tgt_haplotype);
+    }
     if (end - start > MAX_INTERVAL_LENGTH)
         throw std::invalid_argument(
             "Interval length " + std::to_string(end - start) +
