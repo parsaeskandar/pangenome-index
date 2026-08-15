@@ -361,6 +361,14 @@ class Service:
 
         surject = bool(job.options.get("surject", True))
         explicit_target = job.options.get("surject_target") or None
+        # Per-haplotype coverage scores: on by default, with an optional cutoff
+        # so a caller that only wants strong matches doesn't carry all ~464.
+        want_coverage = bool(job.options.get("haplotype_coverage", True))
+        try:
+            min_coverage = float(job.options.get("min_haplotype_coverage") or 0.0)
+        except (TypeError, ValueError):
+            min_coverage = 0.0
+        include_zero = bool(job.options.get("include_zero_coverage", False))
 
         reads = [(s["name"], s["sequence"], "I" * len(s["sequence"])) for s in job.sequences]
         # Bound the giraffe call to the job's remaining budget.
@@ -383,7 +391,10 @@ class Service:
                 alns = []
                 for j, gaf in enumerate(alignments):
                     self._mw.set_call_timeout(max(1.0, deadline - time.time()))
-                    alns.append(self._build_alignment(gaf, surject, explicit_target, primary=(j == 0)))
+                    alns.append(self._build_alignment(
+                        gaf, surject, explicit_target, primary=(j == 0),
+                        coverage=want_coverage, min_coverage=min_coverage,
+                        include_zero=include_zero))
                 results.append({"name": seq["name"], "status": "mapped",
                                 "error": None, "query_length": qlen, "alignments": alns})
             job.completed = i + 1
@@ -391,10 +402,23 @@ class Service:
         job.results = results
 
     def _build_alignment(self, gaf: str, surject: bool,
-                         explicit_target: Optional[str], primary: bool) -> Dict[str, Any]:
+                         explicit_target: Optional[str], primary: bool,
+                         coverage: bool = True,
+                         min_coverage: float = 0.0,
+                         include_zero: bool = False) -> Dict[str, Any]:
         cols = gaf.split("\t")
         tags = _parse_tags(cols[_GAF_TAG_START:]) if len(cols) > _GAF_TAG_START else {}
         haplotypes = _haplotypes_from_tags(tags)
+
+        # Graded score for EVERY haplotype, not just the exact-path carriers in
+        # `haplotypes`. Never fail the alignment over this: it is supplementary.
+        haplotype_coverage: List[Dict[str, Any]] = []
+        if coverage:
+            try:
+                haplotype_coverage = self._mw.haplotype_coverage(
+                    gaf, min_coverage, include_zero)
+            except Exception:
+                haplotype_coverage = []
 
         surjection: Optional[Dict[str, Any]] = None
         if surject:
@@ -425,6 +449,7 @@ class Service:
             "strand": cols[4] if len(cols) > 4 else None,
             "graph_path": cols[5] if len(cols) > 5 else None,
             "haplotypes": haplotypes,
+            "haplotype_coverage": haplotype_coverage,
             "surjection": surjection,
         }
 

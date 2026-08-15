@@ -257,6 +257,39 @@ class PangenomeMiddleware:
             out.sort()
             return out
 
+    def haplotype_coverage(self, gaf: str, min_coverage: float = 0.0,
+                           include_zero: bool = False) -> List[Dict[str, Any]]:
+        """Score every haplotype by how much of one alignment it accounts for.
+
+        Returns [{haplotype, coverage, covered_bp}, ...] sorted by descending
+        coverage, where `coverage` is a 0-100 percentage of the alignment's
+        aligned bases lying on nodes that haplotype also visits.
+
+        This is a graded companion to the engine's "carried by" list: that list
+        holds only haplotypes threading the read's exact allele path, so a
+        haplotype differing at a single variant is absent from it entirely,
+        while here it scores near 100.
+
+        `min_coverage=0` (the default) reports every haplotype sharing any node,
+        however partial; `include_zero` additionally lists haplotypes sharing no
+        node at all, scored 0, giving a complete table of every haplotype.
+
+        Returns [] if the loaded extension predates this call, so callers can
+        treat the field as optional rather than version-gating.
+        """
+        with self._coord_lock:
+            fn = getattr(self._coord, "haplotype_coverage", None)
+            if fn is None:
+                return []
+            try:
+                rows = fn(gaf, float(min_coverage), bool(include_zero))
+            except TypeError:
+                # Extension built before include_zero existed.
+                rows = fn(gaf, float(min_coverage))
+        return [{"haplotype": r.haplotype,
+                 "coverage": round(float(r.coverage), 2),
+                 "covered_bp": int(r.covered_bp)} for r in rows]
+
     def get_haplotype_names(self) -> List[str]:
         """All haplotype/path names known to the coordinate index."""
         with self._coord_lock:

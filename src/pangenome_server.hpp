@@ -13,6 +13,19 @@
 #include <vector>
 #include <unordered_map>
 
+/// How much of one alignment a single haplotype accounts for.
+///
+/// Unlike the engine's "carried by" list — which reports only haplotypes that
+/// thread the read's EXACT allele path and therefore drops a haplotype that
+/// differs at a single variant — this is a graded score, so a haplotype that
+/// matches everywhere except one small site scores near 100 instead of being
+/// omitted.
+struct HaplotypeCoverage {
+    std::string haplotype;    ///< two-field haplotype name, e.g. "HG00097#1"
+    uint64_t covered_bp = 0;  ///< aligned read bases on nodes this haplotype visits
+    double coverage = 0.0;    ///< covered_bp as a percentage of aligned bases, 0..100
+};
+
 struct TranslatedInterval {
     std::string haplotype;
     int64_t start;
@@ -125,6 +138,26 @@ public:
     std::vector<std::string>
     translatable_haplotypes(const std::string& src_haplotype,
                             int64_t start, int64_t end) const;
+
+    /// Score every haplotype by how much of a graph alignment it accounts for.
+    ///
+    /// For each node the alignment visits, the tag array / GBWT reports which
+    /// haplotypes also visit that node; a haplotype is credited with the read
+    /// bases aligned there. The score is those bases as a percentage of all
+    /// aligned bases, so 100 means the haplotype visits every node the read
+    /// does. Both node orientations count, so reverse-strand alignments and
+    /// inverted haplotypes are scored correctly.
+    ///
+    /// Results are sorted by descending coverage. `min_coverage` (0..100) drops
+    /// haplotypes below the threshold; pass 0 (the default) to report every
+    /// haplotype that shares any node, however partial the match.
+    ///
+    /// `include_zero` additionally lists haplotypes that share NO node with the
+    /// alignment, scored 0, so the result covers every haplotype in the graph
+    /// rather than only those with some overlap.
+    std::vector<HaplotypeCoverage>
+    haplotype_coverage(const std::string& gaf_str, double min_coverage = 0.0,
+                       bool include_zero = false) const;
 
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;

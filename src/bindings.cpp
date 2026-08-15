@@ -2,6 +2,9 @@
 #include <pybind11/stl.h>
 #include "pangenome_server.hpp"
 
+#include <iomanip>
+#include <sstream>
+
 namespace py = pybind11;
 
 PYBIND11_MODULE(liftover_ext, m) {
@@ -83,6 +86,19 @@ PYBIND11_MODULE(liftover_ext, m) {
                    " find_seq_lf_steps=" + std::to_string(r.find_seq_lf_steps) + ">";
         });
 
+    py::class_<HaplotypeCoverage>(m, "HaplotypeCoverage")
+        .def(py::init<>())
+        .def_readwrite("haplotype",  &HaplotypeCoverage::haplotype)
+        .def_readwrite("covered_bp", &HaplotypeCoverage::covered_bp)
+        .def_readwrite("coverage",   &HaplotypeCoverage::coverage)
+        .def("__repr__", [](const HaplotypeCoverage& h) {
+            std::ostringstream ss;
+            ss << "<HaplotypeCoverage " << h.haplotype << " "
+               << std::fixed << std::setprecision(1) << h.coverage
+               << "% (" << h.covered_bp << " bp)>";
+            return ss.str();
+        });
+
     py::class_<Index>(m, "Index")
         .def(py::init<>())
         .def("load", &Index::load,
@@ -101,6 +117,15 @@ PYBIND11_MODULE(liftover_ext, m) {
              "Translate coordinates from source to target haplotype.")
         .def("get_haplotype_names", &Index::get_haplotype_names,
              "Return list of valid haplotype names in the loaded index.")
+        .def("haplotype_coverage", &Index::haplotype_coverage,
+             py::arg("graph_alignment_gaf"),
+             py::arg("min_coverage") = 0.0,
+             py::arg("include_zero") = false,
+             "Score every haplotype by the percentage of the alignment's aligned "
+             "bases that lie on nodes it also visits. Returns HaplotypeCoverage "
+             "records sorted by descending coverage. min_coverage=0 reports every "
+             "haplotype sharing any node; include_zero also lists those sharing "
+             "none, scored 0.")
         .def("translatable_haplotypes", &Index::translatable_haplotypes,
              py::arg("src_haplotype"),
              py::arg("start"),

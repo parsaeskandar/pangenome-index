@@ -797,6 +797,93 @@ const char* status_token(panindexer::AnchorBuildResult::Status s) {
 
 } // anonymous namespace
 
+std::vector<HaplotypeCoverage>
+Index::haplotype_coverage(const std::string& gaf_str, double min_coverage,
+                          bool include_zero) const {
+    if (!loaded_) {
+        throw std::runtime_error("Index::haplotype_coverage called before load()");
+    }
+
+    std::vector<HaplotypeCoverage> out;
+    auto mappings = gaf_to_source_mappings(gaf_str, gbz_->graph);
+    if (mappings.empty()) return out;
+
+    const gbwt::GBWT& gbwt_index = gbz_->index;
+    const bool have_names = gbwt_index.hasMetadata() &&
+                            gbwt_index.metadata.hasPathNames() &&
+                            gbwt_index.metadata.hasSampleNames();
+
+    // GBWT path id -> two-field haplotype name, resolved lazily: an alignment
+    // touches only a small number of paths, so this avoids walking all of them.
+    std::unordered_map<size_t, std::string> pid_to_hap;
+    std::unordered_map<std::string, uint64_t> covered;
+    std::unordered_set<std::string> here;
+    uint64_t total_bp = 0;
+
+    for (const panindexer::SourceMapping& m : mappings) {
+        const uint64_t bp = (m.read_end_offset > m.read_begin_offset)
+                            ? (m.read_end_offset - m.read_begin_offset) : 0;
+        if (bp == 0) continue;   // pure insertion: no graph node to credit
+        total_bp += bp;
+
+        // Which haplotypes visit this node? Count a haplotype once per node even
+        // if it visits repeatedly, and accept either orientation so that
+        // reverse-strand alignments (and inversions) still score.
+        here.clear();
+        for (int flip = 0; flip < 2; ++flip) {
+            const bool is_rev = (flip == 0) ? m.is_reverse : !m.is_reverse;
+            gbwt::node_type node = gbwt::Node::encode(m.node_id, is_rev);
+            std::vector<gbwt::size_type> sa = gbwt_rindex_->decompressSA(node);
+            for (gbwt::size_type v : sa) {
+                const size_t pid = static_cast<size_t>(gbwt_rindex_->seqId(v)) / 2;
+                auto it = pid_to_hap.find(pid);
+                if (it == pid_to_hap.end()) {
+                    std::string name;
+                    if (have_names && pid < gbwt_index.metadata.paths()) {
+                        gbwt::PathName pn = gbwt_index.metadata.path(pid);
+                        name = gbwt_index.metadata.sample(pn.sample) + "#" +
+                               std::to_string(pn.phase);
+                    } else {
+                        name = "path_" + std::to_string(pid);
+                    }
+                    it = pid_to_hap.emplace(pid, std::move(name)).first;
+                }
+                here.insert(it->second);
+            }
+        }
+        for (const std::string& h : here) covered[h] += bp;
+    }
+
+    if (total_bp == 0) return out;
+
+    // Optionally round the list out to every haplotype in the graph, so callers
+    // that want a complete ranked table see non-overlapping ones as an explicit
+    // 0 rather than as a silent absence.
+    if (include_zero && min_coverage <= 0.0) {
+        for (const std::string& name : get_haplotype_names()) {
+            covered.emplace(name, 0);   // no-op where already scored
+        }
+    }
+
+    out.reserve(covered.size());
+    for (const auto& kv : covered) {
+        const double pct = 100.0 * static_cast<double>(kv.second) /
+                                   static_cast<double>(total_bp);
+        if (pct < min_coverage) continue;
+        HaplotypeCoverage hc;
+        hc.haplotype = kv.first;
+        hc.covered_bp = kv.second;
+        hc.coverage = pct;
+        out.push_back(std::move(hc));
+    }
+    std::sort(out.begin(), out.end(),
+              [](const HaplotypeCoverage& a, const HaplotypeCoverage& b) {
+                  if (a.covered_bp != b.covered_bp) return a.covered_bp > b.covered_bp;
+                  return a.haplotype < b.haplotype;   // stable, deterministic order
+              });
+    return out;
+}
+
 AnchorBuildPyResult Index::build_surject_anchors(
     const std::string& gaf_str,
     const std::string& target_haplotype) const
