@@ -845,7 +845,11 @@ def main() -> int:
     # Start listening immediately; load indexes in the background so /healthz and
     # 503-until-ready work (the CGI can surface "service starting").
     if not args.stub:
-        required = ("vg", "gbz", "minimizer", "dist", "zipcodes", "ri", "tags", "gbwt_ri", "t1", "t2")
+        # NOTE: t2 is deliberately absent — Table 2 is optional. Omitting it
+        # selects the table-free translation path. Keeping it here made the
+        # process exit before binding the port, so the proxy answered with its
+        # own 503 instead of our JSON one.
+        required = ("vg", "gbz", "minimizer", "dist", "zipcodes", "ri", "tags", "gbwt_ri", "t1")
         missing = [f for f in required if not getattr(args, f)]
         if missing:
             print("ERROR: missing required args (or pass --stub): "
