@@ -341,6 +341,15 @@ Index::translatable_haplotypes_scored(const std::string& src_haplotype,
 
     std::vector<HaplotypeCoverage> out;
 
+    // Inverse of SampledTagArray::encode_value(node_id, is_rev) =
+    //   1 + (((node_id - 1) << 1) | is_rev)
+    auto decode_tag = [](uint64_t code, bool& is_rev) -> int64_t {
+        if (code == 0) return 0;             // 0 is reserved for gaps
+        const uint64_t v = code - 1;
+        is_rev = (v & 1ULL) != 0;
+        return static_cast<int64_t>(v >> 1) + 1;
+    };
+
     FastLocate& rindex = const_cast<FastLocate&>(rlbwt_rindex_);
     SampledTagArray& sampled = const_cast<SampledTagArray&>(sampled_);
     const gbwt::GBWT& gbwt_index = gbz_->index;
@@ -384,9 +393,19 @@ Index::translatable_haplotypes_scored(const std::string& src_haplotype,
 
             for (size_t i = 0; i < tags.size(); i += stride) {
                 const TagInfo& tag = tags[i];
-                // Bases of the interval sitting on this node.
-                uint64_t bp = tag.source_offsets.size();
-                if (bp == 0) continue;
+                if (tag.source_offsets.empty()) continue;
+                // source_offsets holds one entry per VISIT to this node (the tag
+                // array is run-length encoded, so the walk steps run-by-run), not
+                // one per base. Weight each visit by the node's length to get a
+                // real base count — counting visits reports ~1/31 of the truth on
+                // a graph whose nodes average ~31 bp.
+                bool tag_rev = false;
+                const int64_t nid = decode_tag(tag.tag_code, tag_rev);
+                if (nid < 1) continue;
+                const uint64_t node_bp = static_cast<uint64_t>(
+                    graph.get_length(graph.get_handle(nid, tag_rev)));
+                if (node_bp == 0) continue;
+                uint64_t bp = node_bp * tag.source_offsets.size();
                 bp *= stride;                 // a sampled node stands for its stride
                 total_bp += bp;
 
