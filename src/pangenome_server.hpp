@@ -114,12 +114,18 @@ public:
     /// @param gbwt_ri_path    Path to the GBWT FastLocate (.ri).
     /// @param table1_path     Path to Translation Table 1 (.t1).
     /// @param table2_path     Path to Translation Table 2 (.t2).
+    /// `table2_path` may be empty: translation then uses the table-free path
+    /// (translate_no_table2), which needs only Table 1 plus the GBWT/tag array.
     void load(const std::string& gbz_path,
               const std::string& ri_path,
               const std::string& tags_path,
               const std::string& gbwt_ri_path,
               const std::string& table1_path,
-              const std::string& table2_path);
+              const std::string& table2_path = "");
+
+    /// True if a Table 2 was loaded. When false, translate() and
+    /// translatable_haplotypes() automatically use their table-free forms.
+    bool has_table2() const { return has_table2_; }
 
     /// Run coordinate translation from source haplotype interval to target.
     /// Throws std::invalid_argument if (end - start) > 10 000 000.
@@ -158,6 +164,24 @@ public:
     std::vector<HaplotypeCoverage>
     haplotype_coverage(const std::string& gaf_str, double min_coverage = 0.0,
                        bool include_zero = false) const;
+
+    /// Which haplotypes a source interval can reach, each with a coverage score
+    /// — the table-free counterpart of translatable_haplotypes().
+    ///
+    /// Walks the nodes the source visits in the interval and asks the tag array
+    /// which haplotypes also visit them, crediting each haplotype the source
+    /// bases on the nodes it shares. `coverage` is those bases as a percentage
+    /// of the interval, so 100 means the haplotype covers the whole region and
+    /// a small value means it shares only a fragment (often a repeat).
+    ///
+    /// `min_coverage` (0..100) filters the result; `max_nodes` caps how many
+    /// nodes are probed (0 = all), trading precision for speed on wide
+    /// intervals. Sorted by descending coverage.
+    std::vector<HaplotypeCoverage>
+    translatable_haplotypes_scored(const std::string& src_haplotype,
+                                   int64_t start, int64_t end,
+                                   double min_coverage = 0.0,
+                                   size_t max_nodes = 0) const;
 
     /// Coordinate translation WITHOUT Table 2.
     ///
@@ -199,6 +223,9 @@ private:
     std::unique_ptr<gbwt::FastLocate> gbwt_rindex_;
     panindexer::TranslationTable1 table1_;
     panindexer::TranslationTable2 table2_;
+    bool has_table2_ = false;
+    /// Haplotype names, cached at load(): deriving them walks every GBWT path.
+    std::vector<std::string> haplotype_names_;
     std::unordered_map<size_t, std::pair<std::string, size_t>> path_to_global_;
 };
 

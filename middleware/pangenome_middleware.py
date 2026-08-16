@@ -45,7 +45,7 @@ class CoordinateIndexPaths:
     tags_path: str
     gbwt_ri_path: str
     table1_path: str
-    table2_path: str
+    table2_path: str = ""      # optional: empty = table-free translation
 
 
 # Result of building anchors for one graph alignment onto a target haplotype:
@@ -151,7 +151,7 @@ class PangenomeMiddleware:
         tags: str,
         gbwt_ri: str,
         t1: str,
-        t2: str,
+        t2: str = "",
         threads: int = 8,
         max_multimaps: int = 1,
         batch_size: int = 256,
@@ -235,6 +235,21 @@ class PangenomeMiddleware:
                 raw = self._coord.translate(src, int(start), int(end), tgt)
                 out.extend(_fold_to_intervals(raw))
         return out
+
+    def translatable_haplotypes_scored(self, src: str, start: int, end: int,
+                                       min_coverage: float = 0.0,
+                                       max_nodes: int = 0) -> List[Dict[str, Any]]:
+        """Haplotypes a source interval can reach, each with a 0-100 coverage
+        score. Works without Table 2. Returns [] on an extension that predates
+        the call, so callers can treat it as optional."""
+        with self._coord_lock:
+            fn = getattr(self._coord, "translatable_haplotypes_scored", None)
+            if fn is None:
+                return []
+            rows = fn(src, int(start), int(end), float(min_coverage), int(max_nodes))
+        return [{"haplotype": r.haplotype,
+                 "coverage": round(float(r.coverage), 2),
+                 "covered_bp": int(r.covered_bp)} for r in rows]
 
     def translatable_haplotypes(self, src: str, start: int, end: int) -> List[str]:
         """Discovery: the target haplotypes a source contig interval CAN translate

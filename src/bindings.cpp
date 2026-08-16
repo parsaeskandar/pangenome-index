@@ -107,8 +107,17 @@ PYBIND11_MODULE(liftover_ext, m) {
              py::arg("tags_path"),
              py::arg("gbwt_ri_path"),
              py::arg("table1_path"),
-             py::arg("table2_path"),
-             "Load all index files into memory (call once at startup).")
+             py::arg("table2_path") = "",
+             "Load all index files into memory (call once at startup). "
+             "table2_path may be omitted/empty: translation then uses the "
+             "table-free path, which needs only Table 1 plus the GBWT/tag array.")
+        .def("has_table2", &Index::has_table2,
+             "True if a Table 2 was loaded.")
+        .def("translatable_haplotypes_scored", &Index::translatable_haplotypes_scored,
+             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::arg("min_coverage") = 0.0, py::arg("max_nodes") = 0,
+             "Haplotypes a source interval can reach, each scored 0-100 by how "
+             "much of the interval it shares. Needs no Table 2.")
         .def("translate", &Index::translate,
              py::arg("src_haplotype"),
              py::arg("start"),

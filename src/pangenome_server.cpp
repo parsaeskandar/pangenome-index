@@ -280,18 +280,157 @@ void Index::load(const std::string& gbz_path,
         table1_.load(t1in);
     }
     log_step("[5/5]   T1 loaded");
-    log_step(("[5/5] Table 2: " + table2_path).c_str());
-    {
+    // Table 2 is OPTIONAL. Pass an empty path to run without it: translation
+    // then routes through the GBWT/tag array (translate_no_table2), which needs
+    // no per-path-pair table and so is unaffected by how finely the graph
+    // fragments haplotypes into GBWT paths.
+    if (table2_path.empty()) {
+        has_table2_ = false;
+        log_step("[5/5] Table 2: (none) - using table-free translation");
+    } else {
+        log_step(("[5/5] Table 2: " + table2_path).c_str());
         std::ifstream t2in(table2_path, std::ios::binary);
         if (!t2in)
             throw std::runtime_error("Cannot open Table 2: " + table2_path);
         table2_.load(t2in);
+        has_table2_ = true;
+        log_step("[5/5]   T2 loaded");
     }
-    log_step("[5/5]   T2 loaded");
 
     path_to_global_ = build_path_id_to_global(table1_);
+
+    // Cache the haplotype name list. Deriving it walks every GBWT path, which
+    // is hundreds of millions of entries on a fragmented graph — far too slow
+    // to repeat per query.
+    log_step("[5/5] caching haplotype names ...");
+    {
+        const gbwt::GBWT& gi = gbz_->index;
+        if (gi.hasMetadata() && gi.metadata.hasPathNames() &&
+            gi.metadata.hasSampleNames()) {
+            const gbwt::Metadata& meta = gi.metadata;
+            std::unordered_set<std::string> seen;
+            for (size_t p = 0; p < meta.paths(); ++p) {
+                gbwt::PathName pn = meta.path(p);
+                std::string h = meta.sample(pn.sample) + "#" + std::to_string(pn.phase);
+                if (seen.insert(h).second) haplotype_names_.push_back(std::move(h));
+            }
+            std::sort(haplotype_names_.begin(), haplotype_names_.end());
+        }
+    }
+    log_step(("[5/5]   " + std::to_string(haplotype_names_.size()) +
+              " haplotypes cached").c_str());
+
     loaded_ = true;
     log_step("[done] all indexes loaded");
+}
+
+std::vector<HaplotypeCoverage>
+Index::translatable_haplotypes_scored(const std::string& src_haplotype,
+                                      int64_t start, int64_t end,
+                                      double min_coverage,
+                                      size_t max_nodes) const {
+    if (!loaded_)
+        throw std::runtime_error("Index::translatable_haplotypes_scored called before load()");
+    if (end - start > MAX_INTERVAL_LENGTH)
+        throw std::invalid_argument(
+            "Interval length " + std::to_string(end - start) +
+            " exceeds maximum of " + std::to_string(MAX_INTERVAL_LENGTH) + " bases");
+    if (start < 0 || end < 0 || start > end)
+        throw std::invalid_argument("Invalid interval [" +
+            std::to_string(start) + ", " + std::to_string(end) + "]");
+
+    std::vector<HaplotypeCoverage> out;
+
+    FastLocate& rindex = const_cast<FastLocate&>(rlbwt_rindex_);
+    SampledTagArray& sampled = const_cast<SampledTagArray&>(sampled_);
+    const gbwt::GBWT& gbwt_index = gbz_->index;
+    const gbwtgraph::GBWTGraph& graph = gbz_->graph;
+    const bool have_meta = gbwt_index.hasMetadata() &&
+                           gbwt_index.metadata.hasPathNames() &&
+                           gbwt_index.metadata.hasSampleNames();
+
+    std::vector<std::string> source_path_names =
+        path_names_for_haplotype(table1_, src_haplotype);
+    if (source_path_names.empty())
+        throw std::invalid_argument(
+            "No paths found for source haplotype: " + src_haplotype);
+
+    std::unordered_map<size_t, std::string> pid_to_hap;   // resolved lazily
+    std::unordered_map<std::string, uint64_t> covered;
+    std::unordered_set<std::string> here;
+    uint64_t total_bp = 0;
+
+    for (const std::string& name : source_path_names) {
+        for (const PathInterval& pi : table1_.lookup(name,
+                                                     static_cast<size_t>(start),
+                                                     static_cast<size_t>(end) + 1)) {
+            if (pi.end <= pi.start) continue;
+            const size_t src_seq_id = 2 * pi.path_id;
+
+            // Nodes the source visits here, unscoped by target.
+            std::vector<TagInfo> tags = find_tags_in_interval(
+                rindex, sampled, src_seq_id, pi.start, pi.end - 1,
+                &gbwt_index, gbwt_rindex_.get(), &graph,
+                std::numeric_limits<size_t>::max(), nullptr);
+            if (tags.empty()) continue;
+
+            // Optionally subsample: probing every node is exact but each probe
+            // enumerates a node's whole pangenome usage, so wide intervals can
+            // trade a little precision for a lot of speed.
+            size_t stride = 1;
+            if (max_nodes > 0 && tags.size() > max_nodes) {
+                stride = (tags.size() + max_nodes - 1) / max_nodes;
+            }
+
+            for (size_t i = 0; i < tags.size(); i += stride) {
+                const TagInfo& tag = tags[i];
+                // Bases of the interval sitting on this node.
+                uint64_t bp = tag.source_offsets.size();
+                if (bp == 0) continue;
+                bp *= stride;                 // a sampled node stands for its stride
+                total_bp += bp;
+
+                here.clear();
+                for (const NodeVisit& v : find_sequences_for_tag(rindex, sampled, tag.tag_code)) {
+                    const size_t pid = v.seq_id / 2;
+                    auto it = pid_to_hap.find(pid);
+                    if (it == pid_to_hap.end()) {
+                        std::string hn;
+                        if (have_meta && pid < gbwt_index.metadata.paths()) {
+                            gbwt::PathName pn = gbwt_index.metadata.path(pid);
+                            hn = gbwt_index.metadata.sample(pn.sample) + "#" +
+                                 std::to_string(pn.phase);
+                        } else {
+                            hn = "path_" + std::to_string(pid);
+                        }
+                        it = pid_to_hap.emplace(pid, std::move(hn)).first;
+                    }
+                    here.insert(it->second);
+                }
+                for (const std::string& h : here) covered[h] += bp;
+            }
+        }
+    }
+
+    if (total_bp == 0) return out;
+    out.reserve(covered.size());
+    for (const auto& kv : covered) {
+        double pct = 100.0 * static_cast<double>(kv.second) /
+                             static_cast<double>(total_bp);
+        if (pct > 100.0) pct = 100.0;        // stride rounding
+        if (pct < min_coverage) continue;
+        HaplotypeCoverage hc;
+        hc.haplotype = kv.first;
+        hc.covered_bp = kv.second;
+        hc.coverage = pct;
+        out.push_back(std::move(hc));
+    }
+    std::sort(out.begin(), out.end(),
+              [](const HaplotypeCoverage& a, const HaplotypeCoverage& b) {
+                  if (a.covered_bp != b.covered_bp) return a.covered_bp > b.covered_bp;
+                  return a.haplotype < b.haplotype;
+              });
+    return out;
 }
 
 std::vector<TranslatedInterval>
@@ -503,8 +642,8 @@ Index::translate(const std::string& src_haplotype,
 
     // Opt-in table-free path: routes via first/last common node found through
     // the GBWT/tag array instead of Table 2. Set PANGENOME_TRANSLATE_NO_T2=1.
-    static const bool no_t2 = (std::getenv("PANGENOME_TRANSLATE_NO_T2") != nullptr);
-    if (no_t2) {
+    static const bool no_t2_env = (std::getenv("PANGENOME_TRANSLATE_NO_T2") != nullptr);
+    if (no_t2_env || !has_table2_) {
         return translate_no_table2(src_haplotype, start, end, tgt_haplotype);
     }
     if (end - start > MAX_INTERVAL_LENGTH)
@@ -689,6 +828,18 @@ Index::translatable_haplotypes(const std::string& src_haplotype,
                                int64_t start, int64_t end) const {
     if (!loaded_)
         throw std::runtime_error("Index::translatable_haplotypes called before load()");
+
+    // Without Table 2 there is nothing to look up: derive the same answer from
+    // the graph instead, and return just the names for API compatibility.
+    if (!has_table2_) {
+        std::vector<std::string> names;
+        for (const HaplotypeCoverage& hc :
+                 translatable_haplotypes_scored(src_haplotype, start, end)) {
+            names.push_back(hc.haplotype);
+        }
+        std::sort(names.begin(), names.end());
+        return names;
+    }
     if (end - start > MAX_INTERVAL_LENGTH)
         throw std::invalid_argument(
             "Interval length " + std::to_string(end - start) +
@@ -1290,6 +1441,9 @@ AnchorBuildPyResult Index::build_surject_anchors(
 std::vector<std::string> Index::get_haplotype_names() const {
     if (!loaded_)
         throw std::runtime_error("Index::get_haplotype_names called before load()");
+
+    // Built once during load(); recomputing means walking every GBWT path.
+    if (!haplotype_names_.empty()) return haplotype_names_;
 
     const gbwt::GBWT& gbwt_index = gbz_->index;
     if (!gbwt_index.hasMetadata())

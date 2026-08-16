@@ -317,12 +317,21 @@ class Service:
             return []
         return self._mw.get_haplotype_names()
 
-    def liftover_targets(self, src: str, start: int, end: int) -> List[str]:
-        """The target haplotypes a source interval can translate to (names only)."""
+    def liftover_targets(self, src: str, start: int, end: int,
+                         scored: bool = False, min_coverage: float = 0.0,
+                         max_nodes: int = 0):
+        """The target haplotypes a source interval can translate to.
+
+        `scored` returns [{haplotype, coverage, covered_bp}] instead of bare
+        names, so a picker can rank destinations by how much of the region each
+        haplotype actually shares."""
         if not self._ready:
             raise NotReady()
         if self._stub:
             return []
+        if scored:
+            return self._mw.translatable_haplotypes_scored(
+                src, start, end, min_coverage, max_nodes)
         return self._mw.translatable_haplotypes(src, start, end)
 
     # ---- worker ----
@@ -653,8 +662,18 @@ def make_handler(service: Service, cfg: ApiConfig):
                 self._error(400, f"interval length {end - start} exceeds maximum of {MAX_LIFTOVER_SPAN}")
                 return
 
+            scored = bool(payload.get("scored", False))
             try:
-                haplotypes = service.liftover_targets(src, start, end)
+                min_cov = float(payload.get("min_coverage") or 0.0)
+            except (TypeError, ValueError):
+                min_cov = 0.0
+            try:
+                max_nodes = int(payload.get("max_nodes") or 0)
+            except (TypeError, ValueError):
+                max_nodes = 0
+            try:
+                haplotypes = service.liftover_targets(src, start, end,
+                                                      scored, min_cov, max_nodes)
             except NotReady:
                 service.metrics.inc("rejected_503")
                 self._error(503, "service starting; indexes not loaded yet")
@@ -783,7 +802,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--minimizer", help="LONG-READ minimizer index")
     p.add_argument("--dist"); p.add_argument("--zipcodes", help="LONG-READ zipcodes")
     p.add_argument("--ri"); p.add_argument("--tags"); p.add_argument("--gbwt-ri")
-    p.add_argument("--t1"); p.add_argument("--t2")
+    p.add_argument("--t1")
+    p.add_argument("--t2", default="",
+                   help="Translation Table 2 (OPTIONAL). Omit to run table-free: "
+                        "translation then uses only Table 1 + the GBWT/tag array.")
     p.add_argument("--threads", type=int, default=8)
     p.add_argument("--max-multimaps", type=int, default=1)
     p.add_argument("--host", default="127.0.0.1", help="bind address (default localhost; use a tunnel)")
