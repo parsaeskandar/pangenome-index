@@ -23,6 +23,8 @@ LONG-READ minimizer + zipcodes to match the engine's preset.
 """
 from __future__ import annotations
 
+import contextlib
+import os
 import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -191,11 +193,23 @@ class PangenomeMiddleware:
             coord_paths.table1_path,
             coord_paths.table2_path,
         )
-        # Serializes coordinate-index queries: the liftover_ext query path is not
-        # guaranteed re-entrant (lazy index inits, const_cast reads), and the API
-        # can call translate concurrently with mapping. Translation is fast and
-        # low-volume, so a lock is cheap insurance.
-        self._coord_lock = threading.Lock()
+        # Coordinate queries run CONCURRENTLY by default. An audit of the query
+        # path found no shared mutable state: every method it calls on
+        # FastLocate / SampledTagArray is const; FastLocate's lazy rank/select
+        # supports are `mutable` but guarded by std::call_once; SampledTagArray
+        # builds its supports eagerly at load and its ensure_* are no-ops;
+        # gbwt::GBWT, gbwt::FastLocate, GBWTGraph and the sdsl structures carry
+        # no mutable members; the query functions hold no statics, and their
+        # only globals are an atomic `debug` flag and a thread_local stats
+        # counter. The non-const references in those signatures are legacy —
+        # nothing writes through them. The bindings now release the GIL, so
+        # queries genuinely overlap.
+        #
+        # Escape hatch: set PANGENOME_COORD_SERIALIZE=1 to put the old global
+        # lock back if concurrency is ever suspected in a failure.
+        self._coord_lock = (threading.Lock()
+                            if os.environ.get("PANGENOME_COORD_SERIALIZE")
+                            else contextlib.nullcontext())
         self._giraffe = GiraffeServerMiddleware(giraffe_cfg)
         self._giraffe.start()
 

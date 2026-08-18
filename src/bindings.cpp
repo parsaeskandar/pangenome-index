@@ -108,6 +108,7 @@ PYBIND11_MODULE(liftover_ext, m) {
     py::class_<Index>(m, "Index")
         .def(py::init<>())
         .def("load", &Index::load,
+             py::call_guard<py::gil_scoped_release>(),
              py::arg("gbz_path"),
              py::arg("ri_path"),
              py::arg("tags_path"),
@@ -120,12 +121,12 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def("has_table2", &Index::has_table2,
              "True if a Table 2 was loaded.")
         .def("translatable_haplotypes_scored", &Index::translatable_haplotypes_scored,
-             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
              py::arg("min_coverage") = 0.0, py::arg("max_nodes") = 0,
              "Haplotypes a source interval can reach, each scored 0-100 by how "
              "much of the interval it shares. Needs no Table 2.")
         .def("translate", &Index::translate,
-             py::arg("src_haplotype"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"),
              py::arg("start"),
              py::arg("end"),
              py::arg("tgt_haplotype"),
@@ -140,13 +141,14 @@ PYBIND11_MODULE(liftover_ext, m) {
                  return self.translate_no_table2(src, start, end, tgt,
                                                  timeout_ms, &timed_out);
              },
+             py::call_guard<py::gil_scoped_release>(),
              py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
              py::arg("tgt_haplotype"), py::arg("timeout_ms") = 0.0,
              "Translate without Table 2: candidate target paths are found by "
              "walking to the first/last common node through the GBWT/tag array. "
              "translate() uses this automatically when PANGENOME_TRANSLATE_NO_T2 is set.")
         .def("translate_checked", &Index::translate_checked,
-             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
              py::arg("tgt_haplotype"), py::arg("timeout_ms"),
              "translate() with a deadline. Returns TranslationRun(intervals, "
              "timed_out, elapsed_ms); a target that exceeds timeout_ms is "
@@ -154,7 +156,7 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def("get_haplotype_names", &Index::get_haplotype_names,
              "Return list of valid haplotype names in the loaded index.")
         .def("haplotype_coverage", &Index::haplotype_coverage,
-             py::arg("graph_alignment_gaf"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("graph_alignment_gaf"),
              py::arg("min_coverage") = 0.0,
              py::arg("include_zero") = false,
              "Score every haplotype by the percentage of the alignment's aligned "
@@ -163,7 +165,7 @@ PYBIND11_MODULE(liftover_ext, m) {
              "haplotype sharing any node; include_zero also lists those sharing "
              "none, scored 0.")
         .def("translatable_haplotypes", &Index::translatable_haplotypes,
-             py::arg("src_haplotype"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"),
              py::arg("start"),
              py::arg("end"),
              "For a source contig interval, return the sorted list of target "
@@ -184,7 +186,7 @@ PYBIND11_MODULE(liftover_ext, m) {
              "Build surjection anchors from a graph GAF and a target haplotype name. "
              "Returns a list of AnchorRecord (empty if no anchors could be built).")
         .def("build_surject_anchors_full", &Index::build_surject_anchors,
-             py::arg("graph_alignment_gaf"),
+             py::call_guard<py::gil_scoped_release>(), py::arg("graph_alignment_gaf"),
              py::arg("target_haplotype"),
              "Same as build_surject_anchors but returns the full "
              "AnchorBuildResult (status, anchors, target_path_length).");

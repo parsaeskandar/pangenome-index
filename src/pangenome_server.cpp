@@ -233,6 +233,13 @@ void Index::load(const std::string& gbz_path,
         log_step("[1/5]   ensure_last_rank done");
         rlbwt_rindex_.ensure_last_select();
         log_step("[1/5]   ensure_last_select done");
+        // The third lazy support. Like the two above it is `mutable` + built
+        // under std::call_once, so leaving it lazy is safe — but then the first
+        // query to need it pays the construction cost and every concurrent query
+        // blocks on that call_once. Building all three here keeps the first
+        // query as cheap as the rest.
+        rlbwt_rindex_.ensure_blocks_start_select();
+        log_step("[1/5]   ensure_blocks_start_select done");
     }
 
     // 2. GBZ (GBWT + GBWTGraph)
