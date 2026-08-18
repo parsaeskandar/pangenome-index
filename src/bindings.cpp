@@ -130,9 +130,18 @@ PYBIND11_MODULE(liftover_ext, m) {
              py::arg("end"),
              py::arg("tgt_haplotype"),
              "Translate coordinates from source to target haplotype.")
-        .def("translate_no_table2", &Index::translate_no_table2,
+        // Bound through a lambda: the C++ signature also takes timeout_ms and a
+        // bool* out-param, and pybind requires one py::arg per real parameter
+        // (C++ default arguments do not carry over, and bool* is not bindable).
+        .def("translate_no_table2",
+             [](const Index& self, const std::string& src, int64_t start,
+                int64_t end, const std::string& tgt, double timeout_ms) {
+                 bool timed_out = false;
+                 return self.translate_no_table2(src, start, end, tgt,
+                                                 timeout_ms, &timed_out);
+             },
              py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
-             py::arg("tgt_haplotype"),
+             py::arg("tgt_haplotype"), py::arg("timeout_ms") = 0.0,
              "Translate without Table 2: candidate target paths are found by "
              "walking to the first/last common node through the GBWT/tag array. "
              "translate() uses this automatically when PANGENOME_TRANSLATE_NO_T2 is set.")
