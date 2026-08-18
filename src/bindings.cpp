@@ -99,6 +99,12 @@ PYBIND11_MODULE(liftover_ext, m) {
             return ss.str();
         });
 
+    py::class_<TranslationRun>(m, "TranslationRun")
+        .def(py::init<>())
+        .def_readwrite("intervals",  &TranslationRun::intervals)
+        .def_readwrite("timed_out",  &TranslationRun::timed_out)
+        .def_readwrite("elapsed_ms", &TranslationRun::elapsed_ms);
+
     py::class_<Index>(m, "Index")
         .def(py::init<>())
         .def("load", &Index::load,
@@ -130,6 +136,12 @@ PYBIND11_MODULE(liftover_ext, m) {
              "Translate without Table 2: candidate target paths are found by "
              "walking to the first/last common node through the GBWT/tag array. "
              "translate() uses this automatically when PANGENOME_TRANSLATE_NO_T2 is set.")
+        .def("translate_checked", &Index::translate_checked,
+             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::arg("tgt_haplotype"), py::arg("timeout_ms"),
+             "translate() with a deadline. Returns TranslationRun(intervals, "
+             "timed_out, elapsed_ms); a target that exceeds timeout_ms is "
+             "abandoned instead of stalling the request.")
         .def("get_haplotype_names", &Index::get_haplotype_names,
              "Return list of valid haplotype names in the loaded index.")
         .def("haplotype_coverage", &Index::haplotype_coverage,

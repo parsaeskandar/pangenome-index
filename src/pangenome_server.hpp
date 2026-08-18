@@ -33,6 +33,16 @@ struct TranslatedInterval {
     char strand;  // '+' or '-'
 };
 
+/// Outcome of a translation that may be cut short by a deadline.
+struct TranslationRun {
+    std::vector<TranslatedInterval> intervals;
+    /// True if the deadline fired before the query finished. `intervals` then
+    /// holds whatever was produced up to that point (possibly empty), so a
+    /// caller can surface a partial answer plus a warning rather than nothing.
+    bool timed_out = false;
+    double elapsed_ms = 0.0;
+};
+
 /// Plain-data version of a PrecomputedAnchor suitable for Python bindings.
 /// Same fields as panindexer::PrecomputedAnchor, with step_handle_t replaced
 /// by a portable (node, offset) pair (the gbwtgraph step encoding —
@@ -195,10 +205,25 @@ public:
     /// Selected at runtime by setting PANGENOME_TRANSLATE_NO_T2=1, which makes
     /// translate() delegate here; PANGENOME_TRANSLATE_PROBE_CAP bounds how many
     /// nodes are probed from each end before giving up (default 256).
+    /// `timeout_ms > 0` bounds the work: the deadline is checked between source
+    /// fragments, between candidate target paths, and between node probes, so a
+    /// pathological target is abandoned instead of stalling the whole request.
+    /// It cannot preempt a single long call inside those steps, so the actual
+    /// stop can overshoot slightly. `*timed_out` is set when it fires.
     std::vector<TranslatedInterval>
     translate_no_table2(const std::string& src_haplotype,
                         int64_t start, int64_t end,
-                        const std::string& tgt_haplotype) const;
+                        const std::string& tgt_haplotype,
+                        double timeout_ms = 0.0,
+                        bool* timed_out = nullptr) const;
+
+    /// translate() with a per-query deadline, reporting whether it fired.
+    /// Use this when one slow haplotype must not hold up a multi-target query.
+    TranslationRun
+    translate_checked(const std::string& src_haplotype,
+                      int64_t start, int64_t end,
+                      const std::string& tgt_haplotype,
+                      double timeout_ms) const;
 
     /// Return all valid haplotype names present in the loaded index.
     std::vector<std::string> get_haplotype_names() const;

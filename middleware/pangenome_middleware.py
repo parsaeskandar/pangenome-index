@@ -106,6 +106,67 @@ def _fold_to_intervals(raw) -> List[Dict[str, Any]]:
     return out
 
 
+def _fold_to_blocks(raw) -> List[Dict[str, Any]]:
+    """Fold per-base correspondences into BLOCK-LEVEL alignment.
+
+    Where _fold_to_intervals() reports one min/max span per direction-run — so an
+    indel inside a region is spanned straight across, and exon structure is lost —
+    this emits every maximal colinear block, each carrying BOTH sides:
+
+        {haplotype, source_start, source_end, target_start, target_end, strand}
+
+    A block ends wherever the 1:1 correspondence breaks:
+      * source advances by more than 1  -> bases with no target (deletion)
+      * target advances by more than 1  -> bases inserted in the target
+      * target direction flips          -> inversion
+      * different target contig
+    So a gene lifts over as its exon/indel structure rather than one fused span,
+    and one call per (region, target) replaces one call per (feature, target).
+    All coordinates are 0-based half-open; target_start < target_end always, with
+    orientation carried by `strand`.
+    """
+    by_contig: Dict[str, List[Tuple[int, int]]] = {}
+    for p in raw:
+        by_contig.setdefault(p.haplotype, []).append((int(p.start), int(p.end)))
+
+    out: List[Dict[str, Any]] = []
+    for contig, pts in by_contig.items():
+        pts.sort()
+        i, n = 0, len(pts)
+        while i < n:
+            s0, t0 = pts[i]
+            j = i
+            direction = 0
+            while j + 1 < n:
+                s_prev, t_prev = pts[j]
+                s_next, t_next = pts[j + 1]
+                if s_next - s_prev != 1:
+                    break                      # unmapped source bases
+                dt = t_next - t_prev
+                if dt == 1:
+                    step = 1
+                elif dt == -1:
+                    step = -1
+                else:
+                    break                      # jump on the target side
+                if direction == 0:
+                    direction = step
+                elif step != direction:
+                    break                      # orientation change
+                j += 1
+            s1, t1 = pts[j]
+            tgt_lo, tgt_hi = (t0, t1) if direction >= 0 else (t1, t0)
+            out.append({
+                "haplotype": contig,
+                "source_start": s0, "source_end": s1 + 1,
+                "target_start": tgt_lo, "target_end": tgt_hi + 1,
+                "strand": "-" if direction < 0 else "+",
+            })
+            i = j + 1
+    out.sort(key=lambda b: (b["haplotype"], b["source_start"]))
+    return out
+
+
 class PangenomeMiddleware:
     """
     Unified middleware:
@@ -217,7 +278,10 @@ class PangenomeMiddleware:
             return self._coord.translate(src_haplotype, start, end, tgt_haplotype)
 
     def translate_intervals(
-        self, src: str, start: int, end: int, tgts: Sequence[str]
+        self, src: str, start: int, end: int, tgts: Sequence[str],
+        timeout_ms: float = 5000.0,
+        warnings: Optional[List[Dict[str, Any]]] = None,
+        blocks: bool = False,
     ) -> List[Dict[str, Any]]:
         """Translate a source contig interval to one or more target haplotypes,
         returning folded target INTERVALS with strand.
@@ -230,10 +294,26 @@ class PangenomeMiddleware:
         self-identifying via its contig name.
         """
         out: List[Dict[str, Any]] = []
+        checked = getattr(self._coord, "translate_checked", None)
         with self._coord_lock:
             for tgt in tgts:
-                raw = self._coord.translate(src, int(start), int(end), tgt)
-                out.extend(_fold_to_intervals(raw))
+                if checked is not None and timeout_ms and timeout_ms > 0:
+                    # Per-target deadline: one pathological haplotype is dropped
+                    # with a warning instead of blocking the whole query.
+                    run = checked(src, int(start), int(end), tgt, float(timeout_ms))
+                    raw = run.intervals
+                    if run.timed_out and warnings is not None:
+                        warnings.append({
+                            "haplotype": tgt,
+                            "reason": "timeout",
+                            "elapsed_ms": round(float(run.elapsed_ms), 1),
+                            "message": (f"Translation to {tgt} exceeded "
+                                        f"{int(timeout_ms)} ms and was stopped; "
+                                        "results for it may be incomplete."),
+                        })
+                else:
+                    raw = self._coord.translate(src, int(start), int(end), tgt)
+                out.extend(_fold_to_blocks(raw) if blocks else _fold_to_intervals(raw))
         return out
 
     def translatable_haplotypes_scored(self, src: str, start: int, end: int,

@@ -12,7 +12,13 @@ Endpoints:
   GET  /api/v1/map/{job_id}   -> 200 {status, progress, results, error}
   POST /api/v1/liftover       {src, start, end, tgt}   (synchronous)
       src = full contig path; tgt = haplotype or contig, or an array of them
-      -> 200 {intervals:[{haplotype, start, end, strand}, ...]}   (0..N per target)
+      -> 200 {intervals:[{haplotype, start, end, strand}, ...],
+              warnings:[{haplotype, reason, elapsed_ms, message}, ...]}
+      optional "timeout_ms" per target (default 5000): a target exceeding it is
+      abandoned and reported in warnings instead of stalling the request
+      optional "blocks": true -> returns "blocks" instead of "intervals": the full
+      colinear block alignment {haplotype, source_start, source_end, target_start,
+      target_end, strand}, preserving exon/indel structure
   POST /api/v1/liftover/targets {src, start, end}   (synchronous, names only)
       -> 200 {haplotypes:[...]}   haplotypes this source interval CAN translate to
   GET  /api/v1/haplotypes     -> 200 {haplotypes:[...]}   (2-field names)
@@ -62,6 +68,11 @@ VALID_BASES = set("ACGTNacgtn")
 # form (one translate() call per target).
 MAX_LIFTOVER_SPAN = 10_000_000
 MAX_LIFTOVER_TARGETS = 1024
+# Per-TARGET deadline for liftover. One pathological haplotype is abandoned with
+# a warning rather than stalling the whole request. Enforced inside the C++ loop:
+# a Python-side timeout cannot interrupt a call that holds the GIL.
+DEFAULT_LIFTOVER_TIMEOUT_MS = 5000
+MAX_LIFTOVER_TIMEOUT_MS = 60000
 
 
 # --------------------------------------------------------------------------- #
@@ -299,8 +310,10 @@ class Service:
             return self._jobs.get(job_id)
 
     # ---- synchronous coordinate translation (no queue) ----
-    def liftover(self, src: str, start: int, end: int,
-                 tgts: List[str]) -> List[Dict[str, Any]]:
+    def liftover(self, src: str, start: int, end: int, tgts: List[str],
+                 timeout_ms: float = DEFAULT_LIFTOVER_TIMEOUT_MS,
+                 warnings: Optional[List[Dict[str, Any]]] = None,
+                 blocks: bool = False) -> List[Dict[str, Any]]:
         """Fold source→target correspondences into target intervals. Runs inline
         in the request thread (translation is fast); the middleware serializes
         coordinate-index access internally."""
@@ -308,7 +321,9 @@ class Service:
             raise NotReady()
         if self._stub:
             return []
-        return self._mw.translate_intervals(src, start, end, tgts)
+        return self._mw.translate_intervals(src, start, end, tgts,
+                                           timeout_ms=timeout_ms,
+                                           warnings=warnings, blocks=blocks)
 
     def haplotypes(self) -> List[str]:
         if not self._ready:
@@ -621,7 +636,17 @@ def make_handler(service: Service, cfg: ApiConfig):
                 return
 
             try:
-                intervals = service.liftover(src, start, end, tgts)
+                timeout_ms = float(payload.get("timeout_ms")
+                                   or DEFAULT_LIFTOVER_TIMEOUT_MS)
+            except (TypeError, ValueError):
+                timeout_ms = DEFAULT_LIFTOVER_TIMEOUT_MS
+            timeout_ms = max(0.0, min(timeout_ms, MAX_LIFTOVER_TIMEOUT_MS))
+
+            want_blocks = bool(payload.get("blocks", False))
+            warnings: List[Dict[str, Any]] = []
+            try:
+                intervals = service.liftover(src, start, end, tgts,
+                                             timeout_ms, warnings, want_blocks)
             except NotReady:
                 service.metrics.inc("rejected_503")
                 self._error(503, "service starting; indexes not loaded yet")
@@ -637,7 +662,8 @@ def make_handler(service: Service, cfg: ApiConfig):
                 self._error(500, f"liftover failed: {exc}")
                 return
 
-            self._send_json(200, {"intervals": intervals})
+            key = "blocks" if want_blocks else "intervals"
+            self._send_json(200, {key: intervals, "warnings": warnings})
 
         def _handle_liftover_targets(self, payload: Dict[str, Any]) -> None:
             src = payload.get("src")

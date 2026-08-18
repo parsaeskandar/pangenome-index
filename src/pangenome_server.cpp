@@ -455,7 +455,10 @@ Index::translatable_haplotypes_scored(const std::string& src_haplotype,
 std::vector<TranslatedInterval>
 Index::translate_no_table2(const std::string& src_haplotype,
                            int64_t start, int64_t end,
-                           const std::string& tgt_haplotype) const {
+                           const std::string& tgt_haplotype,
+                           double timeout_ms,
+                           bool* timed_out) const {
+    if (timed_out) *timed_out = false;
     if (!loaded_)
         throw std::runtime_error("Index::translate_no_table2 called before load()");
     if (end - start > MAX_INTERVAL_LENGTH)
@@ -548,7 +551,22 @@ Index::translate_no_table2(const std::string& src_haplotype,
     };
     std::vector<HaplotypeTranslation> all_raw;
 
+    // Cooperative deadline. A C++ call holds the GIL for its whole duration, so
+    // no caller-side timeout can interrupt it — the only way to bound one slow
+    // target is to check the clock at safe points and stop ourselves.
+    const auto deadline_t0 = std::chrono::steady_clock::now();
+    bool hit_deadline = false;
+    auto expired = [&]() -> bool {
+        if (timeout_ms <= 0.0 || hit_deadline) return hit_deadline;
+        if (std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - deadline_t0).count() > timeout_ms) {
+            hit_deadline = true;
+        }
+        return hit_deadline;
+    };
+
     for (const PathInterval& pi : source_intervals) {
+        if (expired()) break;                       // between source fragments
         const size_t src_path_id = pi.path_id;
         const size_t local_start = pi.start;
         const size_t local_end = pi.end;
@@ -583,11 +601,14 @@ Index::translate_no_table2(const std::string& src_haplotype,
             return false;
         };
         for (size_t i = 0, probed = 0; i < all_tags.size() && probed < probe_cap; ++i, ++probed) {
+            if (expired()) break;                   // between node probes
             if (probe_tag(all_tags[i])) break;
         }
         for (size_t i = all_tags.size(), probed = 0; i-- > 0 && probed < probe_cap; ++probed) {
+            if (expired()) break;
             if (probe_tag(all_tags[i])) break;
         }
+        if (hit_deadline) break;
         if (candidates.empty()) continue;   // target shares nothing here
 
         // 3) Trace each candidate with the standard pipeline. The extent is the
@@ -595,6 +616,7 @@ Index::translate_no_table2(const std::string& src_haplotype,
         //    homologous sub-range to narrow it to, and the common-node search
         //    below keeps only what source and target actually share.
         for (size_t tgt_path_id : candidates) {
+            if (expired()) break;                   // between candidate targets
             const size_t tgt_seq_id = 2 * tgt_path_id;
 
             std::vector<TagInfo> tags = find_tags_in_interval(
@@ -637,6 +659,8 @@ Index::translate_no_table2(const std::string& src_haplotype,
                   return a.target_haplotype_offset < b.target_haplotype_offset;
               });
 
+    if (timed_out) *timed_out = hit_deadline;
+
     std::vector<TranslatedInterval> results;
     results.reserve(all_raw.size());
     for (const HaplotypeTranslation& ht : all_raw) {
@@ -650,6 +674,22 @@ Index::translate_no_table2(const std::string& src_haplotype,
         results.push_back(ti);
     }
     return results;
+}
+
+TranslationRun
+Index::translate_checked(const std::string& src_haplotype,
+                         int64_t start, int64_t end,
+                         const std::string& tgt_haplotype,
+                         double timeout_ms) const {
+    TranslationRun run;
+    const auto t0 = std::chrono::steady_clock::now();
+    bool timed_out = false;
+    run.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
+                                        timeout_ms, &timed_out);
+    run.timed_out = timed_out;
+    run.elapsed_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    return run;
 }
 
 std::vector<TranslatedInterval>
