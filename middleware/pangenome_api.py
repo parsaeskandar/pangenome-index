@@ -21,6 +21,10 @@ Endpoints:
       target_end, strand}, preserving exon/indel structure
   POST /api/v1/liftover/targets {src, start, end}   (synchronous, names only)
       -> 200 {haplotypes:[...]}   haplotypes this source interval CAN translate to
+      optional "alignments_for": ["HG00097#1", ...] or "alignments_top": N ->
+      each alignment gains "alignments": one surjected alignment per haplotype
+      {haplotype, strand, query_start/end, target_start/end, cigar, matches,
+       mismatches, identity, score, mapping_quality} - enough to build a PSL
   GET  /api/v1/haplotypes     -> 200 {haplotypes:[...]}   (2-field names)
   GET  /healthz               -> 200 {status, ready, ...load/metrics}   (no auth)
 
@@ -73,6 +77,9 @@ MAX_LIFTOVER_TARGETS = 1024
 # a Python-side timeout cannot interrupt a call that holds the GIL.
 DEFAULT_LIFTOVER_TIMEOUT_MS = 5000
 MAX_LIFTOVER_TIMEOUT_MS = 60000
+# Per-haplotype alignments are one surjection each (anchor build + surject), the
+# most expensive stage per read, so the fan-out is bounded.
+MAX_ALIGNMENT_TARGETS = 20
 
 
 # --------------------------------------------------------------------------- #
@@ -198,6 +205,23 @@ def _haplotypes_from_tags(tags: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_CIGAR_RE = __import__("re").compile(r"(\d+)([MIDNSHP=X])")
+
+
+def _cigar_spans(cigar: Optional[str]) -> Tuple[int, int]:
+    """Bases the CIGAR consumes on (query, target)."""
+    q = t = 0
+    for n, op in _CIGAR_RE.findall(cigar or ""):
+        n = int(n)
+        if op in "M=X":
+            q += n; t += n
+        elif op in "IS":
+            q += n
+        elif op in "DN":
+            t += n
+    return q, t
+
+
 def _surjection_from_tags(tags: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     status = tags.get("sj")
     if status is None:
@@ -212,6 +236,19 @@ def _surjection_from_tags(tags: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "mapping_quality": tags.get("sm"),
             "cigar": tags.get("sc"),
         })
+        # Exact edit breakdown (sM/sX/sI/sD). A SAM CIGAR writes matches and
+        # substitutions both as 'M', so identity can only come from these.
+        m, x = tags.get("sM"), tags.get("sX")
+        if m is not None and x is not None:
+            aligned = m + x
+            surj.update({
+                "matches": m,
+                "mismatches": x,
+                "inserted": tags.get("sI", 0),
+                "deleted": tags.get("sD", 0),
+                "aligned_bases": aligned,
+                "identity": round(m / aligned, 6) if aligned else None,
+            })
     return surj
 
 
@@ -393,6 +430,14 @@ class Service:
         except (TypeError, ValueError):
             min_coverage = 0.0
         include_zero = bool(job.options.get("include_zero_coverage", False))
+        # Per-haplotype alignments: an explicit list, or the top N by coverage.
+        align_for = job.options.get("alignments_for") or None
+        if align_for is not None and not isinstance(align_for, list):
+            align_for = [align_for]
+        try:
+            align_top = int(job.options.get("alignments_top") or 0)
+        except (TypeError, ValueError):
+            align_top = 0
 
         reads = [(s["name"], s["sequence"], "I" * len(s["sequence"])) for s in job.sequences]
         # Bound the giraffe call to the job's remaining budget.
@@ -418,7 +463,8 @@ class Service:
                     alns.append(self._build_alignment(
                         gaf, surject, explicit_target, primary=(j == 0),
                         coverage=want_coverage, min_coverage=min_coverage,
-                        include_zero=include_zero))
+                        include_zero=include_zero,
+                        align_for=align_for, align_top=align_top))
                 results.append({"name": seq["name"], "status": "mapped",
                                 "error": None, "query_length": qlen, "alignments": alns})
             job.completed = i + 1
@@ -429,8 +475,13 @@ class Service:
                          explicit_target: Optional[str], primary: bool,
                          coverage: bool = True,
                          min_coverage: float = 0.0,
-                         include_zero: bool = False) -> Dict[str, Any]:
+                         include_zero: bool = False,
+                         align_for: Optional[List[str]] = None,
+                         align_top: int = 0) -> Dict[str, Any]:
         cols = gaf.split("\t")
+        # GAF query coords (0-based half-open) - PSL needs them per alignment.
+        qstart = int(cols[2]) if len(cols) > 2 and cols[2].isdigit() else 0
+        qend = int(cols[3]) if len(cols) > 3 and cols[3].isdigit() else 0
         tags = _parse_tags(cols[_GAF_TAG_START:]) if len(cols) > _GAF_TAG_START else {}
         haplotypes = _haplotypes_from_tags(tags)
 
@@ -466,6 +517,59 @@ class Service:
             else:
                 surjection = None
 
+        # Per-haplotype alignments: one surjection per requested haplotype, so a
+        # caller can draw the read against each one (e.g. as a PSL track) rather
+        # than only against the single chosen target.
+        alignments: List[Dict[str, Any]] = []
+        targets: List[str] = []
+        if align_for:
+            targets = list(align_for)
+        elif align_top and haplotype_coverage:
+            targets = [h["haplotype"] for h in haplotype_coverage[:align_top]]
+        for t in targets[:MAX_ALIGNMENT_TARGETS]:
+            try:
+                anchors, path_len, status = self._mw.build_surject_anchors(gaf, t)
+                if not anchors:
+                    alignments.append({"haplotype": t, "status": "no_anchors",
+                                       "detail": status})
+                    continue
+                lines = self._mw.surject_with_anchors(gaf, anchors, t,
+                                                      target_path_length=path_len)
+                if not lines:
+                    alignments.append({"haplotype": t, "status": "surjection_failed"})
+                    continue
+                sc = lines[0].split("\t")
+                sj = _surjection_from_tags(
+                    _parse_tags(sc[_GAF_TAG_START:]) if len(sc) > _GAF_TAG_START else {})
+                if not sj or sj.get("status") != "ok":
+                    alignments.append({"haplotype": t,
+                                       "status": (sj or {}).get("status", "surjection_failed")})
+                    continue
+                _qspan, tspan = _cigar_spans(sj.get("cigar"))
+                pos = sj.get("position")
+                alignments.append({
+                    "haplotype": sj.get("target") or t,
+                    "requested": t,
+                    "status": "ok",
+                    "strand": sj.get("strand"),
+                    "query_start": qstart,
+                    "query_end": qend,
+                    "target_start": pos,
+                    "target_end": (pos + tspan) if pos is not None else None,
+                    "cigar": sj.get("cigar"),
+                    "matches": sj.get("matches"),
+                    "mismatches": sj.get("mismatches"),
+                    "inserted": sj.get("inserted"),
+                    "deleted": sj.get("deleted"),
+                    "aligned_bases": sj.get("aligned_bases"),
+                    "identity": sj.get("identity"),
+                    "score": sj.get("score"),
+                    "mapping_quality": sj.get("mapping_quality"),
+                })
+            except Exception as exc:
+                alignments.append({"haplotype": t, "status": "error",
+                                   "detail": str(exc)})
+
         return {
             "primary": primary,
             "score": tags.get("AS"),
@@ -474,6 +578,7 @@ class Service:
             "graph_path": cols[5] if len(cols) > 5 else None,
             "haplotypes": haplotypes,
             "haplotype_coverage": haplotype_coverage,
+            "alignments": alignments,
             "surjection": surjection,
         }
 
