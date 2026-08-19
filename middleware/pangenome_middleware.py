@@ -109,23 +109,27 @@ def _fold_to_intervals(raw) -> List[Dict[str, Any]]:
 
 
 def _fold_to_blocks(raw) -> List[Dict[str, Any]]:
-    """Fold per-base correspondences into BLOCK-LEVEL alignment.
+    """Fold per-base correspondences into BLOCK-LEVEL alignment (chain semantics).
 
-    Where _fold_to_intervals() reports one min/max span per direction-run — so an
-    indel inside a region is spanned straight across, and exon structure is lost —
-    this emits every maximal colinear block, each carrying BOTH sides:
+    A block is a maximal run in which the source→target OFFSET is constant:
+    `target - source` for a forward block, `target + source` for a reverse one.
+    That is exactly a chain block, and it means a block ends ONLY on:
 
-        {haplotype, source_start, source_end, target_start, target_end, strand}
+      * an indel          -- the offset changes (source and target advance by
+                             different amounts)
+      * an orientation flip
+      * a different target contig
 
-    A block ends wherever the 1:1 correspondence breaks:
-      * source advances by more than 1  -> bases with no target (deletion)
-      * target advances by more than 1  -> bases inserted in the target
-      * target direction flips          -> inversion
-      * different target contig
-    So a gene lifts over as its exon/indel structure rather than one fused span,
-    and one call per (region, target) replaces one call per (feature, target).
-    All coordinates are 0-based half-open; target_start < target_end always, with
-    orientation carried by `strand`.
+    Crucially it does NOT end on a substitution. A substituted base sits on a
+    different graph node, so it has no correspondence and is missing from the
+    point list; source and target then both skip forward by the same amount and
+    the offset is unchanged, so the block runs straight through it. (Breaking on
+    any gap — the previous behaviour — split a locus into a block per SNV.)
+
+    Emits {haplotype, source_start, source_end, target_start, target_end,
+    strand}; both sides 0-based half-open, target_start < target_end always,
+    orientation in `strand`. Substituted bases are spanned by the block, as in a
+    chain.
     """
     by_contig: Dict[str, List[Tuple[int, int]]] = {}
     for p in raw:
@@ -140,21 +144,20 @@ def _fold_to_blocks(raw) -> List[Dict[str, Any]]:
             j = i
             direction = 0
             while j + 1 < n:
-                s_prev, t_prev = pts[j]
-                s_next, t_next = pts[j + 1]
-                if s_next - s_prev != 1:
-                    break                      # unmapped source bases
-                dt = t_next - t_prev
-                if dt == 1:
-                    step = 1
-                elif dt == -1:
-                    step = -1
+                ds = pts[j + 1][0] - pts[j][0]
+                dt = pts[j + 1][1] - pts[j][1]
+                if ds <= 0:
+                    break
+                if dt == ds:
+                    step = 1        # forward, offset unchanged
+                elif dt == -ds:
+                    step = -1       # reverse, offset unchanged
                 else:
-                    break                      # jump on the target side
+                    break           # indel: the offset moved
                 if direction == 0:
                     direction = step
                 elif step != direction:
-                    break                      # orientation change
+                    break           # orientation flip
                 j += 1
             s1, t1 = pts[j]
             tgt_lo, tgt_hi = (t0, t1) if direction >= 0 else (t1, t0)

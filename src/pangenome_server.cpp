@@ -377,9 +377,10 @@ Index::translatable_haplotypes_scored(const std::string& src_haplotype,
     uint64_t total_bp = 0;
 
     for (const std::string& name : source_path_names) {
+        // lookup() end is EXCLUSIVE; the API is half-open, so pass `end` as-is.
         for (const PathInterval& pi : table1_.lookup(name,
                                                      static_cast<size_t>(start),
-                                                     static_cast<size_t>(end) + 1)) {
+                                                     static_cast<size_t>(end))) {
             if (pi.end <= pi.start) continue;
             const size_t src_seq_id = 2 * pi.path_id;
 
@@ -543,9 +544,10 @@ Index::translate_no_table2(const std::string& src_haplotype,
 
     std::vector<PathInterval> source_intervals;
     for (const std::string& name : source_path_names) {
+        // lookup() end is EXCLUSIVE; the API is half-open, so pass `end` as-is.
         for (PathInterval& pi : table1_.lookup(name,
                                                static_cast<size_t>(start),
-                                               static_cast<size_t>(end) + 1)) {
+                                               static_cast<size_t>(end))) {
             source_intervals.push_back(pi);
         }
     }
@@ -755,7 +757,8 @@ Index::translate(const std::string& src_haplotype,
     std::vector<PathInterval> source_intervals;
     for (const std::string& name : source_path_names) {
         std::vector<PathInterval> pis =
-            table1_.lookup(name, global_start, global_end + 1);
+            // lookup() end is EXCLUSIVE and the API is half-open: pass as-is.
+            table1_.lookup(name, global_start, global_end);
         for (PathInterval& pi : pis)
             source_intervals.push_back(pi);
     }
@@ -927,7 +930,8 @@ Index::translatable_haplotypes(const std::string& src_haplotype,
 
     std::vector<PathInterval> source_intervals;
     for (const std::string& name : source_path_names) {
-        std::vector<PathInterval> pis = table1_.lookup(name, s, e + 1);
+        // lookup() end is EXCLUSIVE and the API is half-open: pass as-is.
+        std::vector<PathInterval> pis = table1_.lookup(name, s, e);
         for (PathInterval& pi : pis)
             source_intervals.push_back(pi);
     }

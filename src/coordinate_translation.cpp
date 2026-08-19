@@ -553,9 +553,33 @@ vector<TagInfo> find_tags_in_interval(FastLocate& r_index, SampledTagArray& samp
     }
     
     if (text_pos_x > text_pos_seq_end) {
-        cerr << "Error: BWT rank calculated from last array (text_pos_x=" << text_pos_x 
-             << ") is greater than sequence end (text_pos_seq_end=" << text_pos_seq_end << ")" << endl;
-        return tags;
+        // last_successor() looks for the first SAMPLED text position at or after
+        // the interval end. When no sample falls between the interval end and
+        // this sequence's end, it returns one belonging to the NEXT sequence,
+        // and walking back from there would traverse the wrong sequence.
+        //
+        // That is not a reason to give up: the sequence's own end is itself a
+        // valid (text_pos, bwt_pos) anchor — text_pos_seq_end was just computed
+        // as SA[bwt_seq_end] — and it is guaranteed to sit at or after the
+        // interval end within this sequence. Clamp to it and let the normal
+        // backward LF walk proceed. Returning empty here silently dropped every
+        // source fragment whose interval ended past the last sample, which on a
+        // heavily fragmented graph is a large share of them.
+        if (text_pos_seq_end < text_pos_j) {
+            // Interval genuinely lies beyond the end of this sequence.
+            if (debug) {
+                cerr << "Interval end (" << text_pos_j << ") is past sequence end ("
+                     << text_pos_seq_end << "); nothing to collect." << endl;
+            }
+            return tags;
+        }
+        if (debug) {
+            cerr << "No sample between interval end and sequence end; anchoring at "
+                 << "sequence end (text_pos=" << text_pos_seq_end
+                 << ", BWT=" << bwt_seq_end << ")." << endl;
+        }
+        text_pos_x = text_pos_seq_end;
+        bwt_pos_x  = bwt_seq_end;
     }
     
     size_t current_text_pos = text_pos_x;
