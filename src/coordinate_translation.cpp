@@ -1411,6 +1411,10 @@ size_t base_offset_to_node_offset(
 
 // Structure to hold first and last common nodes
 struct CommonNodes {
+    /// True when the anchor sat on a node visited exactly once by BOTH sequences,
+    /// so its source/target occurrences are necessarily orthologous.
+    bool first_is_unique = false;
+    bool last_is_unique = false;
     size_t first_source_offset;      // GBWT node offset
     size_t first_target_offset;      // GBWT node offset
     size_t first_source_base;        // RLBWT base offset
@@ -1445,7 +1449,10 @@ bool check_common_node(
     size_t source_seq_id, size_t target_seq_id,
     size_t& source_offset, size_t& target_offset,
     size_t& source_base, size_t& target_base,
-    bool use_largest_offset = false) {
+    bool use_largest_offset = false,
+    size_t* out_source_occurrences = nullptr,
+    size_t* out_target_occurrences = nullptr,
+    size_t target_hint = numeric_limits<size_t>::max()) {
     
     // Decode tag to get GBWT node
     auto [node_id, is_rev] = decode_tag(tag_info.tag_code);
@@ -1560,6 +1567,36 @@ bool check_common_node(
     sort(source_base_offsets.begin(), source_base_offsets.end());
     sort(target_base_offsets.begin(), target_base_offsets.end());
     
+    // How many times does each sequence visit this node? A node visited exactly
+    // once by BOTH is a UNIQUE anchor: its source and target occurrences must
+    // correspond, so orthology is unambiguous. Anything visited repeatedly is a
+    // paralog risk — the copies are homologous but only one is orthologous.
+    if (out_source_occurrences) *out_source_occurrences = source_base_offsets.size();
+    if (out_target_occurrences) *out_target_occurrences = target_base_offsets.size();
+
+    // When the caller supplies a hint (the other anchor's target base), pick the
+    // target occurrence CLOSEST to it rather than the extreme one. Orthologous
+    // positions between two haplotypes of one species are colinear, so the
+    // nearest occurrence is the syntenic one; min/max can land on a paralog
+    // megabases away and silently truncate the mapping.
+    if (target_hint != numeric_limits<size_t>::max() && !target_base_offsets.empty()) {
+        size_t best = target_base_offsets[0];
+        size_t best_d = best > target_hint ? best - target_hint : target_hint - best;
+        for (size_t cand : target_base_offsets) {
+            size_t d = cand > target_hint ? cand - target_hint : target_hint - cand;
+            if (d < best_d) { best_d = d; best = cand; }
+        }
+        target_base = best;
+        source_base = use_largest_offset ? source_base_offsets.back()
+                                         : source_base_offsets[0];
+        // GBWT node offsets: keep the extreme convention, they only seed the walk.
+        source_offset = use_largest_offset
+            ? source_visits[source_visits.size() - 1].second : source_visits[0].second;
+        target_offset = use_largest_offset
+            ? target_visits[target_visits.size() - 1].second : target_visits[0].second;
+        return true;
+    }
+
     // For RLBWT: smaller offset = earlier in sequence, larger offset = later in sequence
     if (use_largest_offset) {
         // use_largest_offset = true: LAST common node
@@ -1639,15 +1676,26 @@ CommonNodes find_first_and_last_common_nodes_gbwt(
         cerr << "  Searching for FIRST common node (earliest in path)..." << endl;
     }
     
+    // Two passes. Pass 0 accepts only UNIQUE anchors (visited exactly once by both
+    // source and target), because then the two occurrences must be orthologous.
+    // Pass 1 accepts any common node, as a fallback. Anchoring on a repeated node
+    // risks picking a paralogous copy, which is how a 1 Mb request ended up
+    // mapping 29 kb: the wrong copy bounded the target walk.
+    for (int pass = 0; pass < 2 && !result.found; ++pass) {
     for (size_t i = 0; i < source_tags.size(); i++) {
         const auto& tag_info = source_tags[i];
         size_t source_offset, target_offset, source_base, target_base;
+        size_t src_occ = 0, tgt_occ = 0;
         
         // For first common node: smallest RLBWT offset + largest GBWT offset (both = earliest)
         if (check_common_node(gbwt_fast_locate, rlbwt_rindex, sampled, tag_info,
                               source_seq_id, target_seq_id,
                               source_offset, target_offset, source_base, target_base,
-                              false)) {  // false = smallest RLBWT + largest GBWT (earliest)
+                              false, &src_occ, &tgt_occ)) {
+            if (pass == 0 && (src_occ != 1 || tgt_occ != 1)) {
+                continue;   // not a unique anchor; leave it for pass 1
+            }
+            result.first_is_unique = (src_occ == 1 && tgt_occ == 1);
             // Found first common node!
             result.first_source_offset = source_offset;
             result.first_target_offset = target_offset;
@@ -1667,6 +1715,7 @@ CommonNodes find_first_and_last_common_nodes_gbwt(
             break;
         }
     }
+    }
     
     if (!result.found) {
         if (debug) {
@@ -1680,15 +1729,51 @@ CommonNodes find_first_and_last_common_nodes_gbwt(
         cerr << "  Searching for LAST common node (latest in path)..." << endl;
     }
     
+    // Same two passes as the first anchor: unique-only, then any. In addition the
+    // candidate must be COLINEAR with the first anchor — the target span it
+    // implies has to be broadly consistent with the source span. Between two
+    // haplotypes of one species indels are small relative to the region, so a
+    // target span wildly different from the source span means a paralogous copy
+    // was selected, not a real structural event. Such a candidate is rejected and
+    // the scan continues outward.
+    bool last_found = false;
+    for (int pass = 0; pass < 2 && !last_found; ++pass) {
     for (size_t i = source_tags.size(); i > 0; i--) {
         const auto& tag_info = source_tags[i - 1];
         size_t source_offset, target_offset, source_base, target_base;
+        size_t src_occ = 0, tgt_occ = 0;
         
         // For last common node: largest RLBWT offset + smallest GBWT offset (both = latest)
+        // On pass 1 (fallback) pass the first anchor's target base as a hint so a
+        // repeated node resolves to its nearest, i.e. syntenic, occurrence.
         if (check_common_node(gbwt_fast_locate, rlbwt_rindex, sampled, tag_info,
                               source_seq_id, target_seq_id,
                               source_offset, target_offset, source_base, target_base,
-                              true)) {  // true = largest RLBWT + smallest GBWT (latest)
+                              true, &src_occ, &tgt_occ,
+                              pass == 0 ? numeric_limits<size_t>::max()
+                                        : result.first_target_base)) {
+            if (pass == 0 && (src_occ != 1 || tgt_occ != 1)) {
+                continue;   // not unique; leave for the fallback pass
+            }
+            // Colinearity / plausibility gate.
+            if (source_base > result.first_source_base &&
+                target_base > result.first_target_base) {
+                const size_t src_span = source_base - result.first_source_base;
+                const size_t tgt_span = target_base - result.first_target_base;
+                const size_t slack = 10000;   // absolute allowance for indels
+                const size_t lo = (src_span > slack) ? (src_span - slack) / 2 : 0;
+                const size_t hi = (src_span + slack) * 2;
+                if (tgt_span < lo || tgt_span > hi) {
+                    if (debug) {
+                        cerr << "    Rejecting last-anchor candidate: source span "
+                             << src_span << " vs target span " << tgt_span
+                             << " is not colinear (likely a paralogous copy)" << endl;
+                    }
+                    continue;
+                }
+            }
+            result.last_is_unique = (src_occ == 1 && tgt_occ == 1);
+            last_found = true;
             // Found last common node!
             result.last_source_offset = source_offset;
             result.last_target_offset = target_offset;
@@ -1706,6 +1791,7 @@ CommonNodes find_first_and_last_common_nodes_gbwt(
             }
             break;
         }
+    }
     }
     
     if (debug) {

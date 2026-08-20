@@ -67,6 +67,8 @@ struct FindTagsInIntervalTiming {
 };
 
 struct CommonNodes {
+    bool first_is_unique = false;
+    bool last_is_unique = false;
     size_t first_source_offset;
     size_t first_target_offset;
     size_t first_source_base;
@@ -696,6 +698,10 @@ Index::translate_no_table2(const std::string& src_haplotype,
                 ht.target_path_id = tgt_path_id;
                 all_raw.push_back(ht);
             }
+        }
+        if (diag) {
+            if (all_raw.size() == raw_before) diag->empty_trace++;
+            close_fragment();
         }
     }
 
