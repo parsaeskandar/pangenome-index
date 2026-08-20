@@ -110,6 +110,13 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def_readwrite("candidates",    &FragmentDiag::candidates)
         .def_readwrite("points",        &FragmentDiag::points)
         .def_readwrite("mapped_span",   &FragmentDiag::mapped_span)
+        .def_readwrite("first_source_base", &FragmentDiag::first_source_base)
+        .def_readwrite("first_target_base", &FragmentDiag::first_target_base)
+        .def_readwrite("last_source_base",  &FragmentDiag::last_source_base)
+        .def_readwrite("last_target_base",  &FragmentDiag::last_target_base)
+        .def_readwrite("first_unique",  &FragmentDiag::first_unique)
+        .def_readwrite("last_unique",   &FragmentDiag::last_unique)
+        .def_readwrite("diag_version",  &FragmentDiag::diag_version)
         .def("__repr__", [](const FragmentDiag& f) {
             std::ostringstream ss;
             ss << "<FragmentDiag path=" << f.src_path_id

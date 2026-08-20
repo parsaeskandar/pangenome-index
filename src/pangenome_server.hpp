@@ -50,6 +50,16 @@ struct FragmentDiag {
     uint32_t candidates = 0;       ///< candidate target paths found by probing
     uint64_t points = 0;           ///< per-base correspondences produced
     uint64_t mapped_span = 0;      ///< last mapped source base - first + 1
+    // Anchor geometry: the two numbers that decide whether the anchors are
+    // colinear. If (last_target_base - first_target_base) is nothing like
+    // (last_source_base - first_source_base), a paralogous copy was anchored.
+    uint64_t first_source_base = 0;
+    uint64_t first_target_base = 0;
+    uint64_t last_source_base = 0;
+    uint64_t last_target_base = 0;
+    bool first_unique = false;     ///< anchor sat on a node unique to both
+    bool last_unique = false;
+    uint32_t diag_version = 2;     ///< bump on change; 0/absent => stale build
 };
 
 /// Aggregate view over all fragments of one translation.

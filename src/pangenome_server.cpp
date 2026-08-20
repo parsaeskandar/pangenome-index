@@ -643,13 +643,30 @@ Index::translate_no_table2(const std::string& src_haplotype,
             }
             return false;
         };
-        for (size_t i = 0, probed = 0; i < all_tags.size() && probed < probe_cap; ++i, ++probed) {
-            if (expired()) break;                   // between node probes
-            if (probe_tag(all_tags[i])) break;
-        }
-        for (size_t i = all_tags.size(), probed = 0; i-- > 0 && probed < probe_cap; ++probed) {
-            if (expired()) break;
-            if (probe_tag(all_tags[i])) break;
+        // Probe ACROSS the whole interval, not just inward from the two ends.
+        //
+        // The target haplotype is stored as many GBWT path fragments (a contig is
+        // split into thousands), so a source interval of any size spans several
+        // target fragments. Stopping at the first hit from each end finds at most
+        // two of them and silently leaves every fragment in between unmapped:
+        // a 1 Mb request found 2 of ~40 fragments and mapped 2.9% of its bases.
+        //
+        // Sample at a stride so the cost stays bounded while still landing inside
+        // each fragment. Fragments shorter than the stride can still be missed,
+        // which is why the caller compares mapped bases against the request.
+        {
+            const size_t n = all_tags.size();
+            const size_t stride = (n > probe_cap) ? (n / probe_cap) : 1;
+            for (size_t i = 0; i < n; i += stride) {
+                if (expired()) break;
+                probe_tag(all_tags[i]);             // collect ALL, do not stop
+            }
+            // Always probe the exact ends: the outermost fragments bound the
+            // interval and matter most for the reported extent.
+            if (!hit_deadline && n) {
+                probe_tag(all_tags[0]);
+                probe_tag(all_tags[n - 1]);
+            }
         }
         if (hit_deadline) break;
         if (diag) fd.candidates = static_cast<uint32_t>(candidates.size());
@@ -676,6 +693,14 @@ Index::translate_no_table2(const std::string& src_haplotype,
             CommonNodes common = find_first_and_last_common_nodes_gbwt(
                 *gbwt_rindex_, rindex, sampled, tags, src_seq_id, tgt_seq_id);
             if (!common.found) continue;
+            if (diag) {
+                fd.first_source_base = common.first_source_base;
+                fd.first_target_base = common.first_target_base;
+                fd.last_source_base  = common.last_source_base;
+                fd.last_target_base  = common.last_target_base;
+                fd.first_unique = common.first_is_unique;
+                fd.last_unique  = common.last_is_unique;
+            }
 
             std::vector<TranslationResult> trans = trace_coordinates_gbwt(
                 *gbwt_index_ptr, *gbwt_rindex_, graph,
