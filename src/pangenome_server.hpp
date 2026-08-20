@@ -33,6 +33,46 @@ struct TranslatedInterval {
     char strand;  // '+' or '-'
 };
 
+/// Per-source-fragment accounting for one translation, so it is possible to see
+/// WHERE bases are lost instead of only that the total came up short. A large
+/// interval is split by Table 1 into many GBWT path fragments, each translated
+/// independently; any fragment that fails contributes nothing and is otherwise
+/// invisible.
+struct FragmentDiag {
+    uint64_t src_path_id = 0;
+    uint64_t extent_start = 0;     ///< path-local extent handed to the trace
+    uint64_t extent_end = 0;       ///< exclusive
+    uint64_t extent_bp = 0;        ///< bases this fragment was asked to cover
+    uint64_t unscoped_tags = 0;    ///< nodes the source visits here
+    uint64_t scoped_tags = 0;      ///< nodes shared with the target (1 == the
+                                   ///< "extended search" case: a single anchor
+                                   ///< outside the interval, which maps ~nothing)
+    uint32_t candidates = 0;       ///< candidate target paths found by probing
+    uint64_t points = 0;           ///< per-base correspondences produced
+    uint64_t mapped_span = 0;      ///< last mapped source base - first + 1
+};
+
+/// Aggregate view over all fragments of one translation.
+struct TranslationDiagnostics {
+    uint64_t fragments = 0;        ///< fragments Table 1 split the request into
+    uint64_t no_tags = 0;          ///< no source tags at all
+    uint64_t no_candidates = 0;    ///< probing found no target path
+    uint64_t traced = 0;           ///< a trace was attempted
+    uint64_t productive = 0;       ///< produced at least one point
+    uint64_t empty_trace = 0;      ///< traced but produced nothing
+    uint64_t single_anchor = 0;    ///< scoped_tags == 1 (extended-search case)
+    uint64_t requested_bp = 0;     ///< sum of fragment extents
+    uint64_t mapped_bp = 0;        ///< total points produced
+    std::vector<FragmentDiag> detail;   ///< capped, see MAX_FRAGMENT_DETAIL
+};
+
+/// translate() plus the per-fragment accounting above.
+struct DiagnosedTranslation {
+    std::vector<TranslatedInterval> intervals;
+    TranslationDiagnostics diagnostics;
+    double elapsed_ms = 0.0;
+};
+
 /// Outcome of a translation that may be cut short by a deadline.
 struct TranslationRun {
     std::vector<TranslatedInterval> intervals;
@@ -215,7 +255,16 @@ public:
                         int64_t start, int64_t end,
                         const std::string& tgt_haplotype,
                         double timeout_ms = 0.0,
-                        bool* timed_out = nullptr) const;
+                        bool* timed_out = nullptr,
+                        TranslationDiagnostics* diag = nullptr) const;
+
+    /// Translate and report per-fragment accounting: how many fragments the
+    /// request was split into, how many produced anything, and how many bases
+    /// each covered. Use this to locate where a short result lost its bases.
+    DiagnosedTranslation
+    translate_diagnosed(const std::string& src_haplotype,
+                        int64_t start, int64_t end,
+                        const std::string& tgt_haplotype) const;
 
     /// translate() with a per-query deadline, reporting whether it fired.
     /// Use this when one slow haplotype must not hold up a multi-target query.

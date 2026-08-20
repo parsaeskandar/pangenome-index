@@ -99,6 +99,45 @@ PYBIND11_MODULE(liftover_ext, m) {
             return ss.str();
         });
 
+    py::class_<FragmentDiag>(m, "FragmentDiag")
+        .def(py::init<>())
+        .def_readwrite("src_path_id",   &FragmentDiag::src_path_id)
+        .def_readwrite("extent_start",  &FragmentDiag::extent_start)
+        .def_readwrite("extent_end",    &FragmentDiag::extent_end)
+        .def_readwrite("extent_bp",     &FragmentDiag::extent_bp)
+        .def_readwrite("unscoped_tags", &FragmentDiag::unscoped_tags)
+        .def_readwrite("scoped_tags",   &FragmentDiag::scoped_tags)
+        .def_readwrite("candidates",    &FragmentDiag::candidates)
+        .def_readwrite("points",        &FragmentDiag::points)
+        .def_readwrite("mapped_span",   &FragmentDiag::mapped_span)
+        .def("__repr__", [](const FragmentDiag& f) {
+            std::ostringstream ss;
+            ss << "<FragmentDiag path=" << f.src_path_id
+               << " extent=" << f.extent_bp << "bp tags=" << f.unscoped_tags
+               << "/" << f.scoped_tags << " cand=" << f.candidates
+               << " points=" << f.points << ">";
+            return ss.str();
+        });
+
+    py::class_<TranslationDiagnostics>(m, "TranslationDiagnostics")
+        .def(py::init<>())
+        .def_readwrite("fragments",     &TranslationDiagnostics::fragments)
+        .def_readwrite("no_tags",       &TranslationDiagnostics::no_tags)
+        .def_readwrite("no_candidates", &TranslationDiagnostics::no_candidates)
+        .def_readwrite("traced",        &TranslationDiagnostics::traced)
+        .def_readwrite("productive",    &TranslationDiagnostics::productive)
+        .def_readwrite("empty_trace",   &TranslationDiagnostics::empty_trace)
+        .def_readwrite("single_anchor", &TranslationDiagnostics::single_anchor)
+        .def_readwrite("requested_bp",  &TranslationDiagnostics::requested_bp)
+        .def_readwrite("mapped_bp",     &TranslationDiagnostics::mapped_bp)
+        .def_readwrite("detail",        &TranslationDiagnostics::detail);
+
+    py::class_<DiagnosedTranslation>(m, "DiagnosedTranslation")
+        .def(py::init<>())
+        .def_readwrite("intervals",   &DiagnosedTranslation::intervals)
+        .def_readwrite("diagnostics", &DiagnosedTranslation::diagnostics)
+        .def_readwrite("elapsed_ms",  &DiagnosedTranslation::elapsed_ms);
+
     py::class_<TranslationRun>(m, "TranslationRun")
         .def(py::init<>())
         .def_readwrite("intervals",  &TranslationRun::intervals)
@@ -147,6 +186,13 @@ PYBIND11_MODULE(liftover_ext, m) {
              "Translate without Table 2: candidate target paths are found by "
              "walking to the first/last common node through the GBWT/tag array. "
              "translate() uses this automatically when PANGENOME_TRANSLATE_NO_T2 is set.")
+        .def("translate_diagnosed", &Index::translate_diagnosed,
+             py::call_guard<py::gil_scoped_release>(),
+             py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
+             py::arg("tgt_haplotype"),
+             "Translate and report per-fragment accounting (how many fragments, "
+             "how many produced anything, bases covered by each) so a short "
+             "result can be traced to the fragments that lost it.")
         .def("translate_checked", &Index::translate_checked,
              py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"), py::arg("start"), py::arg("end"),
              py::arg("tgt_haplotype"), py::arg("timeout_ms"),

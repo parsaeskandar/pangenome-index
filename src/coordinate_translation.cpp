@@ -1534,10 +1534,19 @@ bool check_common_node(
     vector<size_t> source_base_offsets;
     vector<size_t> target_base_offsets;
     
+    // Independent tests, NOT if/else-if: when source_seq_id == target_seq_id
+    // (translating a haplotype to itself) a single visit must land in BOTH
+    // lists. An `else if` here classified every visit as source-only, left
+    // target_base_offsets empty, and rejected the node as "not common" — so
+    // identity translation returned nothing at all. The GBWT block above
+    // already uses independent ifs; this is now consistent with it. For
+    // source != target the behaviour is unchanged, since a visit can only
+    // match one of the two.
     for (const auto& visit : source_visits_rlbwt) {
         if (visit.seq_id == source_seq_id) {
             source_base_offsets.push_back(visit.offset);
-        } else if (visit.seq_id == target_seq_id) {
+        }
+        if (visit.seq_id == target_seq_id) {
             target_base_offsets.push_back(visit.offset);
         }
     }

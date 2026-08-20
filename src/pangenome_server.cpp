@@ -465,8 +465,12 @@ Index::translate_no_table2(const std::string& src_haplotype,
                            int64_t start, int64_t end,
                            const std::string& tgt_haplotype,
                            double timeout_ms,
-                           bool* timed_out) const {
+                           bool* timed_out,
+                           TranslationDiagnostics* diag) const {
     if (timed_out) *timed_out = false;
+    // Cap the per-fragment detail: a whole-chromosome request can split into
+    // thousands of fragments and the aggregate counters answer most questions.
+    constexpr size_t MAX_FRAGMENT_DETAIL = 500;
     if (!loaded_)
         throw std::runtime_error("Index::translate_no_table2 called before load()");
     if (end - start > MAX_INTERVAL_LENGTH)
@@ -576,6 +580,33 @@ Index::translate_no_table2(const std::string& src_haplotype,
 
     for (const PathInterval& pi : source_intervals) {
         if (expired()) break;                       // between source fragments
+        FragmentDiag fd;
+        const size_t raw_before = all_raw.size();
+        size_t frag_min_src = std::numeric_limits<size_t>::max(), frag_max_src = 0;
+        if (diag) {
+            diag->fragments++;
+            fd.src_path_id = pi.path_id;
+            fd.extent_start = pi.start;
+            fd.extent_end = pi.end;
+            fd.extent_bp = (pi.end > pi.start) ? (pi.end - pi.start) : 0;
+            diag->requested_bp += fd.extent_bp;
+        }
+        auto close_fragment = [&]() {
+            if (!diag) return;
+            fd.points = all_raw.size() - raw_before;
+            if (fd.points) {
+                for (size_t k = raw_before; k < all_raw.size(); ++k) {
+                    const size_t so = all_raw[k].source_haplotype_offset;
+                    frag_min_src = std::min(frag_min_src, so);
+                    frag_max_src = std::max(frag_max_src, so);
+                }
+                fd.mapped_span = frag_max_src - frag_min_src + 1;
+                diag->productive++;
+            }
+            diag->mapped_bp += fd.points;
+            if (fd.scoped_tags == 1) diag->single_anchor++;
+            if (diag->detail.size() < MAX_FRAGMENT_DETAIL) diag->detail.push_back(fd);
+        };
         const size_t src_path_id = pi.path_id;
         const size_t local_start = pi.start;
         const size_t local_end = pi.end;
@@ -594,7 +625,8 @@ Index::translate_no_table2(const std::string& src_haplotype,
             rindex, sampled, src_seq_id, seq_start_incl, seq_end_incl,
             gbwt_index_ptr, gbwt_rindex_.get(), &graph,
             std::numeric_limits<size_t>::max(), nullptr);
-        if (all_tags.empty()) continue;
+        if (diag) fd.unscoped_tags = all_tags.size();
+        if (all_tags.empty()) { if (diag) { diag->no_tags++; close_fragment(); } continue; }
 
         // 2) Walk inward from both ends until a node the target also visits.
         //    find_tags_in_interval returns tags sorted by source offset, so the
@@ -618,7 +650,12 @@ Index::translate_no_table2(const std::string& src_haplotype,
             if (probe_tag(all_tags[i])) break;
         }
         if (hit_deadline) break;
-        if (candidates.empty()) continue;   // target shares nothing here
+        if (diag) fd.candidates = static_cast<uint32_t>(candidates.size());
+        if (candidates.empty()) {           // target shares nothing here
+            if (diag) { diag->no_candidates++; close_fragment(); }
+            continue;
+        }
+        if (diag) diag->traced++;
 
         // 3) Trace each candidate with the standard pipeline. The extent is the
         //    whole query interval: without Table 2 there is no precomputed
@@ -631,6 +668,7 @@ Index::translate_no_table2(const std::string& src_haplotype,
             std::vector<TagInfo> tags = find_tags_in_interval(
                 rindex, sampled, src_seq_id, seq_start_incl, seq_end_incl,
                 gbwt_index_ptr, gbwt_rindex_.get(), &graph, tgt_seq_id, nullptr);
+            if (diag) fd.scoped_tags = std::max<uint64_t>(fd.scoped_tags, tags.size());
             if (tags.empty()) continue;
 
             CommonNodes common = find_first_and_last_common_nodes_gbwt(
@@ -683,6 +721,19 @@ Index::translate_no_table2(const std::string& src_haplotype,
         results.push_back(ti);
     }
     return results;
+}
+
+DiagnosedTranslation
+Index::translate_diagnosed(const std::string& src_haplotype,
+                           int64_t start, int64_t end,
+                           const std::string& tgt_haplotype) const {
+    DiagnosedTranslation out;
+    const auto t0 = std::chrono::steady_clock::now();
+    out.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
+                                        0.0, nullptr, &out.diagnostics);
+    out.elapsed_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - t0).count();
+    return out;
 }
 
 TranslationRun
