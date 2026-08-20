@@ -621,6 +621,7 @@ Index::translate_no_table2(const std::string& src_haplotype,
 
         const size_t seq_start_incl = local_start;
         const size_t seq_end_incl = local_end - 1;
+        size_t probe_pad = 0;
 
         // 1) Nodes the source visits in this interval, unscoped by target.
         std::vector<TagInfo> all_tags = find_tags_in_interval(
@@ -635,13 +636,28 @@ Index::translate_no_table2(const std::string& src_haplotype,
         //    first hit going forward is the first common node and the first hit
         //    going backward is the last common node. Their target paths are the
         //    only candidates worth tracing — no table, no path enumeration.
-        std::unordered_set<size_t> candidates;
+        // candidate target path -> [min, max] source offset where it was observed.
+        // Each target fragment covers only part of the interval; remembering where
+        // lets each candidate be traced over its OWN window instead of the whole
+        // request, which is the difference between linear and quadratic cost.
+        std::unordered_map<size_t, std::pair<size_t, size_t>> candidates;
         auto probe_tag = [&](const TagInfo& tag) -> bool {
+            bool hit = false;
+            size_t lo = std::numeric_limits<size_t>::max(), hi = 0;
+            for (size_t off : tag.source_offsets) { lo = std::min(lo, off); hi = std::max(hi, off); }
+            if (lo == std::numeric_limits<size_t>::max()) { lo = hi = 0; }
             for (const NodeVisit& v : find_sequences_for_tag(rindex, sampled, tag.tag_code)) {
                 const size_t pid = v.seq_id / 2;
-                if (path_is_target(pid)) { candidates.insert(pid); return true; }
+                if (!path_is_target(pid)) continue;
+                auto it = candidates.find(pid);
+                if (it == candidates.end()) candidates.emplace(pid, std::make_pair(lo, hi));
+                else {
+                    it->second.first  = std::min(it->second.first, lo);
+                    it->second.second = std::max(it->second.second, hi);
+                }
+                hit = true;
             }
-            return false;
+            return hit;
         };
         // Probe ACROSS the whole interval, not just inward from the two ends.
         //
@@ -657,6 +673,9 @@ Index::translate_no_table2(const std::string& src_haplotype,
         {
             const size_t n = all_tags.size();
             const size_t stride = (n > probe_cap) ? (n / probe_cap) : 1;
+            // Bases between consecutive probes: a fragment may begin up to this
+            // far before, and end this far after, where we happened to see it.
+            probe_pad = ((seq_end_incl - seq_start_incl + 1) * stride) / (n ? n : 1) + 1;
             for (size_t i = 0; i < n; i += stride) {
                 if (expired()) break;
                 probe_tag(all_tags[i]);             // collect ALL, do not stop
@@ -680,12 +699,22 @@ Index::translate_no_table2(const std::string& src_haplotype,
         //    whole query interval: without Table 2 there is no precomputed
         //    homologous sub-range to narrow it to, and the common-node search
         //    below keeps only what source and target actually share.
-        for (size_t tgt_path_id : candidates) {
+        for (const auto& cand_entry : candidates) {
             if (expired()) break;                   // between candidate targets
+            const size_t tgt_path_id = cand_entry.first;
             const size_t tgt_seq_id = 2 * tgt_path_id;
 
+            // Trace only the window this target fragment was actually seen in,
+            // padded by the probe resolution. Running every candidate over the
+            // whole interval made the work candidates x interval; this makes the
+            // total proportional to the interval, since the fragments partition it.
+            const size_t win_lo = (cand_entry.second.first > seq_start_incl + probe_pad)
+                                  ? cand_entry.second.first - probe_pad : seq_start_incl;
+            const size_t win_hi = std::min(seq_end_incl, cand_entry.second.second + probe_pad);
+            if (win_hi < win_lo) continue;
+
             std::vector<TagInfo> tags = find_tags_in_interval(
-                rindex, sampled, src_seq_id, seq_start_incl, seq_end_incl,
+                rindex, sampled, src_seq_id, win_lo, win_hi,
                 gbwt_index_ptr, gbwt_rindex_.get(), &graph, tgt_seq_id, nullptr);
             if (diag) fd.scoped_tags = std::max<uint64_t>(fd.scoped_tags, tags.size());
             if (tags.empty()) continue;
@@ -704,7 +733,7 @@ Index::translate_no_table2(const std::string& src_haplotype,
 
             std::vector<TranslationResult> trans = trace_coordinates_gbwt(
                 *gbwt_index_ptr, *gbwt_rindex_, graph,
-                src_seq_id, seq_start_incl, seq_end_incl, tgt_seq_id,
+                src_seq_id, win_lo, win_hi, tgt_seq_id,
                 common.first_source_offset, common.first_target_offset,
                 common.first_source_base, common.first_target_base,
                 common.first_tag_code,
