@@ -490,7 +490,10 @@ Index::translate_no_table2(const std::string& src_haplotype,
     static const size_t probe_cap = []() -> size_t {
         const char* e = std::getenv("PANGENOME_TRANSLATE_PROBE_CAP");
         if (e) { long v = std::atol(e); if (v > 0) return static_cast<size_t>(v); }
-        return 256;
+        // Discovery probes now use the cheap GBWT gate rather than the RLBWT
+        // enumeration, so a larger budget is affordable and buys completeness on
+        // wide intervals.
+        return 1024;
     }();
 
     // Target may be a haplotype ("HG002#1") or a full contig ("HG002#1#chr1").
@@ -641,53 +644,81 @@ Index::translate_no_table2(const std::string& src_haplotype,
         // lets each candidate be traced over its OWN window instead of the whole
         // request, which is the difference between linear and quadratic cost.
         std::unordered_map<size_t, std::pair<size_t, size_t>> candidates;
+
+        // Discovery uses the GBWT decompressSA gate, NOT find_sequences_for_tag:
+        // the latter enumerates a node's entire pangenome-wide visit list (the
+        // ~1ms primitive that dominated the anchor builder), while discovery only
+        // needs sequence ids. Nodes visited by an implausible number of sequences
+        // are REPEATS: they belong to fragments from all over the haplotype, so
+        // they invent candidates that share no synteny here and stretch a
+        // candidate's window across the whole request. Skipping them keeps both
+        // the candidate set and the windows honest.
+        static const size_t repeat_visits = []() -> size_t {
+            const char* e = std::getenv("PANGENOME_PROBE_REPEAT_LIMIT");
+            if (e) { long v = std::atol(e); if (v > 0) return static_cast<size_t>(v); }
+            return 1024;
+        }();
         auto probe_tag = [&](const TagInfo& tag) -> bool {
-            bool hit = false;
+            // Inverse of SampledTagArray::encode_value.
+            if (tag.tag_code == 0) return false;
+            const uint64_t code = tag.tag_code - 1;
+            const bool tag_rev = (code & 1ULL) != 0;
+            const int64_t nid = static_cast<int64_t>(code >> 1) + 1;
+
             size_t lo = std::numeric_limits<size_t>::max(), hi = 0;
             for (size_t off : tag.source_offsets) { lo = std::min(lo, off); hi = std::max(hi, off); }
             if (lo == std::numeric_limits<size_t>::max()) { lo = hi = 0; }
-            for (const NodeVisit& v : find_sequences_for_tag(rindex, sampled, tag.tag_code)) {
-                const size_t pid = v.seq_id / 2;
-                if (!path_is_target(pid)) continue;
-                auto it = candidates.find(pid);
-                if (it == candidates.end()) candidates.emplace(pid, std::make_pair(lo, hi));
-                else {
-                    it->second.first  = std::min(it->second.first, lo);
-                    it->second.second = std::max(it->second.second, hi);
+
+            bool hit = false;
+            for (int flip = 0; flip < 2; ++flip) {
+                gbwt::node_type node = gbwt::Node::encode(nid, flip ? !tag_rev : tag_rev);
+                std::vector<gbwt::size_type> sa = gbwt_rindex_->decompressSA(node);
+                if (sa.size() > repeat_visits) continue;      // repeat: unusable anchor
+                for (gbwt::size_type v : sa) {
+                    const size_t pid = static_cast<size_t>(gbwt_rindex_->seqId(v)) / 2;
+                    if (!path_is_target(pid)) continue;
+                    auto it = candidates.find(pid);
+                    if (it == candidates.end()) candidates.emplace(pid, std::make_pair(lo, hi));
+                    else {
+                        it->second.first  = std::min(it->second.first, lo);
+                        it->second.second = std::max(it->second.second, hi);
+                    }
+                    hit = true;
                 }
-                hit = true;
             }
             return hit;
         };
-        // Probe ACROSS the whole interval, not just inward from the two ends.
-        //
-        // The target haplotype is stored as many GBWT path fragments (a contig is
-        // split into thousands), so a source interval of any size spans several
-        // target fragments. Stopping at the first hit from each end finds at most
-        // two of them and silently leaves every fragment in between unmapped:
-        // a 1 Mb request found 2 of ~40 fragments and mapped 2.9% of its bases.
-        //
-        // Sample at a stride so the cost stays bounded while still landing inside
-        // each fragment. Fragments shorter than the stride can still be missed,
-        // which is why the caller compares mapped bases against the request.
+
         {
             const size_t n = all_tags.size();
-            const size_t stride = (n > probe_cap) ? (n / probe_cap) : 1;
-            // Bases between consecutive probes: a fragment may begin up to this
-            // far before, and end this far after, where we happened to see it.
-            probe_pad = ((seq_end_incl - seq_start_incl + 1) * stride) / (n ? n : 1) + 1;
+            // Space probes by SOURCE DISTANCE, not by a fixed count. A fixed count
+            // over-probes a small interval (10 kb needs ~1 fragment but paid 256
+            // probes) and under-probes a large one (1 Mb strided ~3.9 kb, so any
+            // target fragment shorter than that was missed and its bases lost).
+            // Aim for one probe per `probe_spacing` bases of source, which is what
+            // actually determines the shortest fragment we can still find.
+            static const size_t probe_spacing = []() -> size_t {
+                const char* e = std::getenv("PANGENOME_PROBE_SPACING_BP");
+                if (e) { long v = std::atol(e); if (v > 0) return static_cast<size_t>(v); }
+                return 2000;
+            }();
+            const size_t extent_bp = seq_end_incl - seq_start_incl + 1;
+            size_t wanted = extent_bp / probe_spacing + 1;
+            if (wanted < 4) wanted = 4;
+            if (wanted > probe_cap) wanted = probe_cap;
+            const size_t stride = (n > wanted) ? (n / wanted) : 1;
+            probe_pad = (extent_bp * stride) / (n ? n : 1) + 1;
             for (size_t i = 0; i < n; i += stride) {
                 if (expired()) break;
                 probe_tag(all_tags[i]);             // collect ALL, do not stop
             }
-            // Always probe the exact ends: the outermost fragments bound the
-            // interval and matter most for the reported extent.
             if (!hit_deadline && n) {
                 probe_tag(all_tags[0]);
                 probe_tag(all_tags[n - 1]);
             }
         }
         if (hit_deadline) break;
+
         if (diag) fd.candidates = static_cast<uint32_t>(candidates.size());
         if (candidates.empty()) {           // target shares nothing here
             if (diag) { diag->no_candidates++; close_fragment(); }

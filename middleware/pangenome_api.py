@@ -9,6 +9,13 @@ Endpoints:
   POST /api/v1/map            {sequences:[{name,sequence}], options:{...}}
       -> 200 {job_id, status:"queued", n_sequences}
       (?sync=1 blocks and returns the finished envelope)
+      optional "max_multimaps": N -> process at most N alignments per sequence
+      for THIS request (<= the engine ceiling fixed by --max-multimaps at startup).
+      Truncation happens before surjection, so a smaller N is genuinely cheaper.
+      optional "alignments_for": ["HG00097#1", ...] or "alignments_top": N ->
+      each alignment gains "alignments": one surjected alignment per haplotype
+      {haplotype, strand, query_start/end, target_start/end, cigar, matches,
+       mismatches, identity, score, mapping_quality} - enough to build a PSL
   GET  /api/v1/map/{job_id}   -> 200 {status, progress, results, error}
   POST /api/v1/liftover       {src, start, end, tgt}   (synchronous)
       src = full contig path; tgt = haplotype or contig, or an array of them
@@ -21,10 +28,6 @@ Endpoints:
       target_end, strand}, preserving exon/indel structure
   POST /api/v1/liftover/targets {src, start, end}   (synchronous, names only)
       -> 200 {haplotypes:[...]}   haplotypes this source interval CAN translate to
-      optional "alignments_for": ["HG00097#1", ...] or "alignments_top": N ->
-      each alignment gains "alignments": one surjected alignment per haplotype
-      {haplotype, strand, query_start/end, target_start/end, cigar, matches,
-       mismatches, identity, score, mapping_quality} - enough to build a PSL
   GET  /api/v1/haplotypes     -> 200 {haplotypes:[...]}   (2-field names)
   GET  /healthz               -> 200 {status, ready, ...load/metrics}   (no auth)
 
@@ -102,6 +105,10 @@ class ApiConfig:
     # §4 auth (None = disabled, with a warning)
     auth_token: Optional[str] = None
     # engine
+    # Engine ceiling (-M) is fixed at startup; this is how many of the returned
+    # alignments the API actually processes per request when the caller does not
+    # say. Kept separate so the ceiling can be raised without making every
+    # request pay for surjecting all of them.
     default_max_multimaps: int = 1
 
 
@@ -430,6 +437,10 @@ class Service:
         except (TypeError, ValueError):
             min_coverage = 0.0
         include_zero = bool(job.options.get("include_zero_coverage", False))
+        try:
+            req_multimaps = int(job.options.get("max_multimaps") or 0)
+        except (TypeError, ValueError):
+            req_multimaps = 0
         # Per-haplotype alignments: an explicit list, or the top N by coverage.
         align_for = job.options.get("alignments_for") or None
         if align_for is not None and not isinstance(align_for, list):
@@ -457,6 +468,13 @@ class Service:
                 results.append({"name": seq["name"], "status": "unmapped",
                                 "error": None, "query_length": qlen, "alignments": []})
             else:
+                # Truncate BEFORE surjecting. The engine has already done its
+                # mapping work (its ceiling is the startup -M), but each returned
+                # alignment costs a full anchor build + surjection here, which is
+                # the expensive stage. Cutting the list first is what makes a
+                # "just give me 1" request cheap even on an engine set to -M 10.
+                if req_multimaps > 0:
+                    alignments = alignments[:req_multimaps]
                 alns = []
                 for j, gaf in enumerate(alignments):
                     self._mw.set_call_timeout(max(1.0, deadline - time.time()))
@@ -938,7 +956,13 @@ def _parse_args() -> argparse.Namespace:
                    help="Translation Table 2 (OPTIONAL). Omit to run table-free: "
                         "translation then uses only Table 1 + the GBWT/tag array.")
     p.add_argument("--threads", type=int, default=8)
-    p.add_argument("--max-multimaps", type=int, default=1)
+    p.add_argument("--max-multimaps", type=int, default=1,
+                   help="ENGINE ceiling (-M): the most alignments giraffe will "
+                        "report per read. Fixed at startup; raising it lets "
+                        "requests ask for more, at some mapping cost on every read.")
+    p.add_argument("--default-multimaps", type=int, default=1,
+                   help="How many alignments per sequence the API processes when "
+                        "a request does not specify. Must be <= --max-multimaps.")
     p.add_argument("--host", default="127.0.0.1", help="bind address (default localhost; use a tunnel)")
     p.add_argument("--port", type=int, default=8791)
     p.add_argument("--stub", action="store_true", help="canned results, no indexes")
@@ -962,7 +986,7 @@ def main() -> int:
         max_queued=args.max_queued, job_timeout_s=args.job_timeout,
         job_ttl_s=args.job_ttl, max_jobs=args.max_jobs,
         auth_token=os.environ.get("PANGENOME_API_TOKEN") or None,
-        default_max_multimaps=args.max_multimaps,
+        default_max_multimaps=args.default_multimaps,
     )
     if cfg.auth_token is None:
         print("WARNING: PANGENOME_API_TOKEN not set — auth is DISABLED.", file=sys.stderr)
