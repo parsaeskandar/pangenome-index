@@ -124,13 +124,32 @@ struct IntervalMapping {
     size_t src_start   = 0;  ///< Start on source path (local, inclusive)
     size_t src_end     = 0;  ///< End on source path   (local, exclusive)
     size_t tgt_path_id = 0;  ///< GBWT path_id of the target subpath
+    /// Target interval [tgt_start, tgt_end) on tgt_path_id, path-local.
+    /// Populated only by "B2" tables (build_table2_b2); zero and meaningless
+    /// when has_target_coords() is false. Always stored ascending, even when
+    /// tgt_reverse is set — the flag records the direction of correspondence,
+    /// not the storage order.
+    size_t tgt_start   = 0;
+    size_t tgt_end     = 0;
+    /// True when the source traverses this block in the opposite orientation
+    /// to the target, i.e. src_start corresponds to tgt_end rather than
+    /// tgt_start. Callers that ignore this will mirror inverted blocks.
+    bool   tgt_reverse = false;
 
     size_t src_len() const { return src_end - src_start; }
+    size_t tgt_len() const { return tgt_end - tgt_start; }
 };
 
-/// Result of a Table 2 lookup: target path_id only (no target coordinates).
+/// Result of a Table 2 lookup. Target coordinates are present only for tables
+/// built with target coordinates (see TranslationTable2::has_target_coords);
+/// check has_coords before using tgt_start/tgt_end rather than testing them
+/// against zero, which is a legitimate offset.
 struct TargetInterval {
     size_t tgt_path_id = 0;
+    size_t tgt_start   = 0;
+    size_t tgt_end     = 0;
+    bool   tgt_reverse = false;
+    bool   has_coords  = false;
 };
 
 /**
@@ -166,6 +185,12 @@ public:
     /// Number of (src_path_id, tgt_haplotype) pairs stored.
     size_t num_entries() const { return entries_.size(); }
 
+    /// True when the loaded table carries target intervals ("B2" form). False
+    /// for tables whose entries only name a target path. Set by load(); for a
+    /// table populated in memory via add_mapping() it reflects whether any
+    /// mapping supplied a non-empty target interval.
+    bool has_target_coords() const { return has_target_coords_; }
+
     /// Total number of IntervalMapping segments across all keys.
     size_t total_segments() const;
 
@@ -192,6 +217,53 @@ private:
         }
     };
     std::map<Key, std::vector<IntervalMapping>> entries_;
+    bool has_target_coords_ = false;
+};
+
+/**
+ * Streaming writer for Table 2 files.
+ *
+ * TranslationTable2 keeps a std::map keyed by (path id, haplotype string). An
+ * all-pairs B2 table has one key per (source path, target haplotype) — tens of
+ * millions of keys holding one segment each — where that map costs several GB of
+ * node, string and vector overhead on top of the payload. This writer takes
+ * groups in sorted key order and emits the file directly, so a builder never
+ * materializes the map.
+ *
+ * Usage: call begin_key() for each key in ascending (src_path_id, haplotype)
+ * order, add_segment() for its segments in ascending src_start order, then
+ * finish(). Keys must not repeat.
+ */
+class TranslationTable2Writer {
+public:
+    /// Writes to `out`; `haplotype_names` must list every name begin_key() will
+    /// use (it is interned in the file, so names cost 4 bytes per key, not a
+    /// full string). Nothing is written until finish().
+    TranslationTable2Writer(std::ostream& out,
+                            const std::vector<std::string>& haplotype_names);
+
+    /// Start a new key. Returns false if the name is not in haplotype_names or
+    /// the key is not greater than the previous one.
+    bool begin_key(size_t src_path_id, const std::string& tgt_haplotype);
+
+    /// Append a segment to the current key.
+    void add_segment(const IntervalMapping& seg);
+
+    /// Write header, name table and all buffered keys. Must be called once.
+    void finish();
+
+    size_t num_keys() const { return keys_.size(); }
+    size_t num_segments() const { return segments_.size(); }
+
+private:
+    std::ostream& out_;
+    std::vector<std::string> names_;
+    std::map<std::string, uint32_t> name_ids_;
+    /// (src_path_id, hap_id, first segment index, segment count)
+    struct KeyRec { size_t src_path_id; uint32_t hap_id; size_t first; size_t count; };
+    std::vector<KeyRec> keys_;
+    std::vector<IntervalMapping> segments_;
+    bool finished_ = false;
 };
 
 } // namespace panindexer
