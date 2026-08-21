@@ -17,6 +17,11 @@ Endpoints:
       {haplotype, strand, query_start/end, target_start/end, cigar, matches,
        mismatches, identity, score, mapping_quality} - enough to build a PSL
   GET  /api/v1/map/{job_id}   -> 200 {status, progress, results, error}
+  POST /api/v1/surject        {tgt, job_id, name, index} | {tgt, gaf}  (synchronous)
+      -> 200 {haplotype, surjection:{...}}
+      Re-surjects an ALREADY-MAPPED alignment onto a different haplotype without
+      remapping. Reference a cached job (valid for the job TTL) or pass the GAF.
+      404 if the job has expired -> caller falls back to /api/v1/map.
   POST /api/v1/liftover       {src, start, end, tgt}   (synchronous)
       src = full contig path; tgt = haplotype or contig, or an array of them
       -> 200 {intervals:[{haplotype, start, end, strand}, ...],
@@ -83,6 +88,12 @@ MAX_LIFTOVER_TIMEOUT_MS = 60000
 # Per-haplotype alignments are one surjection each (anchor build + surject), the
 # most expensive stage per read, so the fan-out is bounded.
 MAX_ALIGNMENT_TARGETS = 20
+# Total bytes of cached graph alignments (GAFs) retained across live jobs for
+# re-surjection. A long read's GAF path is tens of KB, so an unbounded cache
+# would reach gigabytes on a box that already holds the pangenome index. Past
+# the budget the oldest jobs' GAFs are dropped: /api/v1/surject then 404s and
+# the caller re-maps, which is the designed fallback.
+MAX_CACHED_GAF_BYTES = 256 * 1024 * 1024
 
 
 # --------------------------------------------------------------------------- #
@@ -284,6 +295,13 @@ class Job:
     started_at: Optional[float] = None
     finished_at: Optional[float] = None
     total_bp: int = 0
+    # Raw graph alignments (GAF lines) per sequence name. Surjection only needs
+    # the GAF plus a target name, so keeping these lets a caller re-surject to a
+    # different haplotype WITHOUT paying for mapping again — mapping is by far
+    # the expensive stage. Held for the job's TTL, not returned in the envelope
+    # (they are long and the caller normally does not need them).
+    gafs: Dict[str, List[str]] = field(default_factory=dict)
+    gaf_bytes: int = 0
     done_evt: threading.Event = field(default_factory=threading.Event)
 
     def envelope(self) -> Dict[str, Any]:
@@ -329,6 +347,7 @@ class Service:
             "queue_depth": self._queue.qsize(),
             "max_queued": self._cfg.max_queued,
             "jobs_retained": len(self._jobs),
+            "cached_gaf_bytes": sum(j.gaf_bytes for j in self._jobs.values()),
             **self._metrics.snapshot(),
         }
 
@@ -368,6 +387,41 @@ class Service:
         return self._mw.translate_intervals(src, start, end, tgts,
                                            timeout_ms=timeout_ms,
                                            warnings=warnings, blocks=blocks)
+
+    def resurject(self, tgt: str, job_id: str = "", name: str = "",
+                  index: int = 0, gaf: str = "") -> Dict[str, Any]:
+        """Surject an EXISTING graph alignment onto a new target haplotype.
+
+        Skips mapping entirely: the graph alignment is already known, so this is
+        just anchor building + surjection. Either supply the GAF directly, or
+        reference a still-cached job by (job_id, name, index)."""
+        if not self._ready:
+            raise NotReady()
+        if self._stub:
+            return {"status": "stub"}
+        if not gaf:
+            job = self.get(job_id)
+            if job is None:
+                raise KeyError("unknown or expired job")
+            lines = job.gafs.get(name)
+            if not lines:
+                raise KeyError(f"no cached alignment for sequence {name!r}")
+            if index < 0 or index >= len(lines):
+                raise IndexError(f"alignment index {index} out of range "
+                                 f"({len(lines)} available)")
+            gaf = lines[index]
+
+        anchors, path_len, status = self._mw.build_surject_anchors(gaf, tgt)
+        if not anchors:
+            return {"status": "surjection_failed", "detail": f"no_anchors ({status})"}
+        out = self._mw.surject_with_anchors(gaf, anchors, tgt,
+                                            target_path_length=path_len)
+        if not out:
+            return {"status": "surjection_failed"}
+        cols = out[0].split("\t")
+        sj = _surjection_from_tags(
+            _parse_tags(cols[_GAF_TAG_START:]) if len(cols) > _GAF_TAG_START else {})
+        return sj or {"status": "surjection_failed"}
 
     def haplotypes(self) -> List[str]:
         if not self._ready:
@@ -409,6 +463,7 @@ class Service:
                     job.status = "done"
                 job.finished_at = time.time()
                 job.done_evt.set()
+                self._trim_gaf_cache()
                 self._log_job(job)
                 if job.status == "done":
                     self._metrics.inc("completed")
@@ -464,6 +519,8 @@ class Service:
                 return
             seq = job.sequences[i]
             qlen = len(seq["sequence"])
+            job.gafs[seq["name"]] = list(alignments)
+            job.gaf_bytes += sum(len(a) for a in alignments)
             if not alignments:
                 results.append({"name": seq["name"], "status": "unmapped",
                                 "error": None, "query_length": qlen, "alignments": []})
@@ -609,6 +666,25 @@ class Service:
         job.results = results
 
     # ---- lifecycle: TTL eviction (§6) ----
+    def _trim_gaf_cache(self) -> None:
+        """Hold the cached GAFs under MAX_CACHED_GAF_BYTES, dropping the oldest
+        finished jobs' first. Dropping only the GAFs (not the job) keeps the
+        result envelope fetchable; re-surjection falls back to a re-map."""
+        with self._jobs_lock:
+            total = sum(j.gaf_bytes for j in self._jobs.values())
+            if total <= MAX_CACHED_GAF_BYTES:
+                return
+            # Oldest finished first; unfinished jobs (no finished_at) last, since
+            # those are the ones a caller is most likely to re-surject next.
+            for job in sorted(self._jobs.values(),
+                              key=lambda j: (j.finished_at is None, j.finished_at or 0.0)):
+                if total <= MAX_CACHED_GAF_BYTES:
+                    break
+                if job.gaf_bytes:
+                    total -= job.gaf_bytes
+                    job.gafs.clear()
+                    job.gaf_bytes = 0
+
     def _reaper(self) -> None:
         while True:
             time.sleep(60.0)
@@ -788,6 +864,57 @@ def make_handler(service: Service, cfg: ApiConfig):
             key = "blocks" if want_blocks else "intervals"
             self._send_json(200, {key: intervals, "warnings": warnings})
 
+        def _handle_surject(self, payload: Dict[str, Any]) -> None:
+            """Re-surject an alignment we already have onto another haplotype.
+
+            The point of this endpoint is what it does NOT do: it never remaps.
+            Mapping dominates the cost of /api/v1/map; surjection is a small
+            fraction of it. When a user switches which haplotype they are
+            viewing, only the surjection needs redoing."""
+            tgt = payload.get("tgt")
+            if not isinstance(tgt, str) or not tgt:
+                service.metrics.inc("rejected_400")
+                self._error(400, "'tgt' must be a non-empty string (haplotype or contig)")
+                return
+
+            gaf = payload.get("gaf") or ""
+            job_id = payload.get("job_id") or ""
+            name = payload.get("name") or ""
+            if not isinstance(gaf, str) or not isinstance(job_id, str) or not isinstance(name, str):
+                service.metrics.inc("rejected_400")
+                self._error(400, "'gaf', 'job_id' and 'name' must be strings")
+                return
+            if not gaf and not (job_id and name):
+                service.metrics.inc("rejected_400")
+                self._error(400, "supply either 'gaf', or both 'job_id' and 'name'")
+                return
+            try:
+                index = int(payload.get("index") or 0)
+            except (TypeError, ValueError):
+                service.metrics.inc("rejected_400")
+                self._error(400, "'index' must be an integer")
+                return
+
+            try:
+                sj = service.resurject(tgt, job_id=job_id, name=name,
+                                       index=index, gaf=gaf)
+            except NotReady:
+                service.metrics.inc("rejected_503")
+                self._error(503, "service starting; indexes not loaded yet")
+                return
+            except (KeyError, IndexError) as exc:
+                # Expired job or unknown sequence: the caller must re-map. This
+                # is a normal outcome after the job TTL, not a server fault.
+                service.metrics.inc("rejected_400")
+                self._error(404, str(exc).strip("'"))
+                return
+            except Exception as exc:
+                service.metrics.inc("errored")
+                self._error(500, f"surject failed: {exc}")
+                return
+
+            self._send_json(200, {"haplotype": tgt, "surjection": sj})
+
         def _handle_liftover_targets(self, payload: Dict[str, Any]) -> None:
             src = payload.get("src")
             start = payload.get("start")
@@ -881,7 +1008,8 @@ def make_handler(service: Service, cfg: ApiConfig):
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path.rstrip("/")
-            if path not in ("/api/v1/map", "/api/v1/liftover", "/api/v1/liftover/targets"):
+            if path not in ("/api/v1/map", "/api/v1/surject", "/api/v1/liftover",
+                            "/api/v1/liftover/targets"):
                 self._error(404, f"unknown path: {parsed.path}")
                 return
             if not self._authed():
@@ -902,6 +1030,9 @@ def make_handler(service: Service, cfg: ApiConfig):
                 self._error(400, f"invalid JSON body: {exc}")
                 return
 
+            if path == "/api/v1/surject":
+                self._handle_surject(payload)
+                return
             if path == "/api/v1/liftover":
                 self._handle_liftover(payload)
                 return
