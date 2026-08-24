@@ -1574,6 +1574,25 @@ bool check_common_node(
     if (out_source_occurrences) *out_source_occurrences = source_base_offsets.size();
     if (out_target_occurrences) *out_target_occurrences = target_base_offsets.size();
 
+    // The source base MUST come from an occurrence inside the queried interval.
+    // source_base_offsets holds every occurrence of this node on the whole
+    // source sequence (find_sequences_for_tag), while tag_info.source_offsets
+    // holds only those find_tags_in_interval saw inside the interval. Taking the
+    // extreme of the former anchors the translation at an occurrence the query
+    // never covered whenever the node repeats elsewhere on the contig — which is
+    // what the assertion below used to abort on rather than prevent.
+    //
+    // Where the old code was right the two are identical, so this is a no-op
+    // there; where they differ, this picks the in-interval occurrence.
+    auto pick_source_base = [&](bool largest) -> size_t {
+        if (!tag_info.source_offsets.empty()) {
+            return largest
+                ? *max_element(tag_info.source_offsets.begin(), tag_info.source_offsets.end())
+                : *min_element(tag_info.source_offsets.begin(), tag_info.source_offsets.end());
+        }
+        return largest ? source_base_offsets.back() : source_base_offsets[0];
+    };
+
     // When the caller supplies a hint (the other anchor's target base), pick the
     // target occurrence CLOSEST to it rather than the extreme one. Orthologous
     // positions between two haplotypes of one species are colinear, so the
@@ -1587,8 +1606,7 @@ bool check_common_node(
             if (d < best_d) { best_d = d; best = cand; }
         }
         target_base = best;
-        source_base = use_largest_offset ? source_base_offsets.back()
-                                         : source_base_offsets[0];
+        source_base = pick_source_base(use_largest_offset);
         // GBWT node offsets: keep the extreme convention, they only seed the walk.
         source_offset = use_largest_offset
             ? source_visits[source_visits.size() - 1].second : source_visits[0].second;
@@ -1601,29 +1619,13 @@ bool check_common_node(
     if (use_largest_offset) {
         // use_largest_offset = true: LAST common node
         // Select largest RLBWT base offset (latest in sequence)
-        source_base = source_base_offsets.back();
+        source_base = pick_source_base(true);
         target_base = target_base_offsets.back();
-        
-        // Verify: the largest source offset from find_sequences_for_tag should match
-        // the largest offset in tag_info.source_offsets (which came from find_tags_in_interval)
-        if (!tag_info.source_offsets.empty()) {
-            size_t expected_source_base = *max_element(tag_info.source_offsets.begin(), tag_info.source_offsets.end());
-            assert(source_base == expected_source_base && 
-                   "source_base from find_sequences_for_tag doesn't match expected from TagInfo");
-        }
     } else {
         // use_largest_offset = false: FIRST common node
         // Select smallest RLBWT base offset (earliest in sequence)
-        source_base = source_base_offsets[0];
+        source_base = pick_source_base(false);
         target_base = target_base_offsets[0];
-        
-        // Verify: the smallest source offset from find_sequences_for_tag should match
-        // the smallest offset in tag_info.source_offsets (which came from find_tags_in_interval)
-        if (!tag_info.source_offsets.empty()) {
-            size_t expected_source_base = *min_element(tag_info.source_offsets.begin(), tag_info.source_offsets.end());
-            assert(source_base == expected_source_base && 
-                   "source_base from find_sequences_for_tag doesn't match expected from TagInfo");
-        }
     }
 
     if (debug) {

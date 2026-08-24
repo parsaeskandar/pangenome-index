@@ -825,12 +825,19 @@ Index::translate_diagnosed(const std::string& src_haplotype,
                            const std::string& tgt_haplotype) const {
     DiagnosedTranslation out;
     const auto t0 = std::chrono::steady_clock::now();
-    // Diagnostics are produced only by the table-free path (they describe its
-    // per-fragment probing), so this deliberately stays on translate_no_table2
-    // even when a Table 2 is loaded. It is a debugging entry point, not the
-    // serving path — see translate_checked for that.
-    out.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
-                                        0.0, nullptr, &out.diagnostics);
+    // Every entry point routes through translate(), so a loaded Table 2 is used
+    // here too. The per-fragment counters describe the table-free path's probing
+    // and are not collected on the Table 2 path; diagnostics.table2_path says
+    // which ran, so all-zero counters are not mistaken for "found nothing".
+    // Set PANGENOME_TRANSLATE_NO_T2=1 to get the counters back.
+    static const bool no_t2_env = (std::getenv("PANGENOME_TRANSLATE_NO_T2") != nullptr);
+    if (no_t2_env || !has_table2_) {
+        out.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
+                                            0.0, nullptr, &out.diagnostics);
+    } else {
+        out.diagnostics.table2_path = true;
+        out.intervals = translate(src_haplotype, start, end, tgt_haplotype);
+    }
     out.elapsed_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count();
     return out;

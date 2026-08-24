@@ -64,6 +64,11 @@ struct FragmentDiag {
 
 /// Aggregate view over all fragments of one translation.
 struct TranslationDiagnostics {
+    /// True when the request ran on the Table 2 path, where the per-fragment
+    /// counters below are NOT collected (they describe the table-free path's
+    /// probing). Check this before reading them: all-zero counters mean "not
+    /// measured here", not "nothing was found".
+    bool table2_path = false;
     uint64_t fragments = 0;        ///< fragments Table 1 split the request into
     uint64_t no_tags = 0;          ///< no source tags at all
     uint64_t no_candidates = 0;    ///< probing found no target path

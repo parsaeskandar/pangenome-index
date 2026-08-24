@@ -128,6 +128,7 @@ PYBIND11_MODULE(liftover_ext, m) {
 
     py::class_<TranslationDiagnostics>(m, "TranslationDiagnostics")
         .def(py::init<>())
+        .def_readwrite("table2_path",   &TranslationDiagnostics::table2_path)
         .def_readwrite("fragments",     &TranslationDiagnostics::fragments)
         .def_readwrite("no_tags",       &TranslationDiagnostics::no_tags)
         .def_readwrite("no_candidates", &TranslationDiagnostics::no_candidates)
