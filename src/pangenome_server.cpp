@@ -303,7 +303,12 @@ void Index::load(const std::string& gbz_path,
             throw std::runtime_error("Cannot open Table 2: " + table2_path);
         table2_.load(t2in);
         has_table2_ = true;
-        log_step("[5/5]   T2 loaded");
+        // Report the form, since both are valid inputs and they behave very
+        // differently: a "B2" table carries target intervals and one coarse
+        // block per path pair, the older form only names the target path.
+        log_step(table2_.has_target_coords()
+                 ? "[5/5]   T2 loaded (B2 form: with target intervals)"
+                 : "[5/5]   T2 loaded (target path ids only, no target intervals)");
     }
 
     path_to_global_ = build_path_id_to_global(table1_);
@@ -820,6 +825,10 @@ Index::translate_diagnosed(const std::string& src_haplotype,
                            const std::string& tgt_haplotype) const {
     DiagnosedTranslation out;
     const auto t0 = std::chrono::steady_clock::now();
+    // Diagnostics are produced only by the table-free path (they describe its
+    // per-fragment probing), so this deliberately stays on translate_no_table2
+    // even when a Table 2 is loaded. It is a debugging entry point, not the
+    // serving path — see translate_checked for that.
     out.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
                                         0.0, nullptr, &out.diagnostics);
     out.elapsed_ms = std::chrono::duration<double, std::milli>(
@@ -835,8 +844,12 @@ Index::translate_checked(const std::string& src_haplotype,
     TranslationRun run;
     const auto t0 = std::chrono::steady_clock::now();
     bool timed_out = false;
-    run.intervals = translate_no_table2(src_haplotype, start, end, tgt_haplotype,
-                                        timeout_ms, &timed_out);
+    // Goes through translate(), so it uses Table 2 whenever one is loaded. It
+    // previously called translate_no_table2 directly, which meant the serving
+    // path — the API always passes a timeout, so it always lands here — could
+    // never use a Table 2 no matter what was loaded.
+    run.intervals = translate(src_haplotype, start, end, tgt_haplotype,
+                              timeout_ms, &timed_out);
     run.timed_out = timed_out;
     run.elapsed_ms = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - t0).count();
@@ -846,16 +859,37 @@ Index::translate_checked(const std::string& src_haplotype,
 std::vector<TranslatedInterval>
 Index::translate(const std::string& src_haplotype,
                  int64_t start, int64_t end,
-                 const std::string& tgt_haplotype) const {
+                 const std::string& tgt_haplotype,
+                 double timeout_ms,
+                 bool* timed_out) const {
     if (!loaded_)
         throw std::runtime_error("Index::translate called before load()");
+    if (timed_out) *timed_out = false;
 
-    // Opt-in table-free path: routes via first/last common node found through
-    // the GBWT/tag array instead of Table 2. Set PANGENOME_TRANSLATE_NO_T2=1.
+    // Table 2 is the default whenever one is loaded. The table-free path (via
+    // first/last common node through the GBWT/tag array) is the fallback when
+    // there is no Table 2, and the escape hatch when PANGENOME_TRANSLATE_NO_T2
+    // is set — useful for A/B comparison and if a table turns out to be wrong.
     static const bool no_t2_env = (std::getenv("PANGENOME_TRANSLATE_NO_T2") != nullptr);
     if (no_t2_env || !has_table2_) {
-        return translate_no_table2(src_haplotype, start, end, tgt_haplotype);
+        return translate_no_table2(src_haplotype, start, end, tgt_haplotype,
+                                   timeout_ms, timed_out);
     }
+
+    // Cooperative deadline, same contract as translate_no_table2: checked
+    // between source fragments and between candidate target paths, so a
+    // pathological target is abandoned rather than stalling the request. It
+    // cannot preempt a single long call, so the stop can overshoot slightly.
+    const auto deadline_t0 = std::chrono::steady_clock::now();
+    bool hit_deadline = false;
+    auto past_deadline = [&]() {
+        if (timeout_ms <= 0.0 || hit_deadline) return hit_deadline;
+        if (std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - deadline_t0).count() > timeout_ms) {
+            hit_deadline = true;
+        }
+        return hit_deadline;
+    };
     if (end - start > MAX_INTERVAL_LENGTH)
         throw std::invalid_argument(
             "Interval length " + std::to_string(end - start) +
@@ -918,6 +952,7 @@ Index::translate(const std::string& src_haplotype,
     std::vector<HaplotypeTranslation> all_raw;
 
     for (const PathInterval& pi : source_intervals) {
+        if (past_deadline()) break;
         size_t src_path_id = pi.path_id;
         size_t local_start = pi.start;
         size_t local_end   = pi.end;
@@ -955,6 +990,7 @@ Index::translate(const std::string& src_haplotype,
             table2_.segments(src_path_id, tgt_key);
 
         for (size_t tgt_path_id : distinct_tgt_paths) {
+            if (past_deadline()) break;
             size_t extent_start = local_end, extent_end = local_start;
             for (const IntervalMapping& m : segs) {
                 if (m.tgt_path_id != tgt_path_id) continue;
@@ -1031,6 +1067,7 @@ Index::translate(const std::string& src_haplotype,
         ti.strand    = '+';
         results.push_back(ti);
     }
+    if (timed_out) *timed_out = hit_deadline;
     return results;
 }
 

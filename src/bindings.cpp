@@ -171,12 +171,21 @@ PYBIND11_MODULE(liftover_ext, m) {
              py::arg("min_coverage") = 0.0, py::arg("max_nodes") = 0,
              "Haplotypes a source interval can reach, each scored 0-100 by how "
              "much of the interval it shares. Needs no Table 2.")
-        .def("translate", &Index::translate,
+        // Bound through a lambda for the same reason as translate_no_table2
+        // below: the C++ signature also takes timeout_ms and a bool* out-param,
+        // and pybind needs one py::arg per real parameter (C++ defaults do not
+        // carry over, and bool* is not bindable).
+        .def("translate",
+             [](const Index& self, const std::string& src, int64_t start,
+                int64_t end, const std::string& tgt) {
+                 return self.translate(src, start, end, tgt);
+             },
              py::call_guard<py::gil_scoped_release>(), py::arg("src_haplotype"),
              py::arg("start"),
              py::arg("end"),
              py::arg("tgt_haplotype"),
-             "Translate coordinates from source to target haplotype.")
+             "Translate coordinates from source to target haplotype. Uses "
+             "Table 2 when one is loaded.")
         // Bound through a lambda: the C++ signature also takes timeout_ms and a
         // bool* out-param, and pybind requires one py::arg per real parameter
         // (C++ default arguments do not carry over, and bool* is not bindable).

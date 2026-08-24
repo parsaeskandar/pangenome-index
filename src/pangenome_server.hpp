@@ -189,10 +189,17 @@ public:
 
     /// Run coordinate translation from source haplotype interval to target.
     /// Throws std::invalid_argument if (end - start) > 10 000 000.
+    ///
+    /// Uses Table 2 whenever one is loaded, falling back to the table-free path
+    /// otherwise or when PANGENOME_TRANSLATE_NO_T2=1 is set. `timeout_ms > 0`
+    /// bounds the work with the same cooperative deadline the table-free path
+    /// uses; `*timed_out` is set if it fires.
     std::vector<TranslatedInterval>
     translate(const std::string& src_haplotype,
               int64_t start, int64_t end,
-              const std::string& tgt_haplotype) const;
+              const std::string& tgt_haplotype,
+              double timeout_ms = 0.0,
+              bool* timed_out = nullptr) const;
 
     /// Discovery query: for a source contig interval, return the set of target
     /// haplotype names (2-field) that have a homologous region overlapping it —
