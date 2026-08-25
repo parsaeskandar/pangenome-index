@@ -92,6 +92,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -108,6 +109,10 @@
 #endif
 
 namespace {
+
+/// How many times a run may be halved when no plausible anchor pairing exists.
+/// 6 gives 64 pieces, far past any real number of target contigs per run.
+constexpr int MAX_SPLIT_DEPTH = 6;
 
 void usage(const char* prog) {
     std::cerr
@@ -393,6 +398,8 @@ int main(int argc, char** argv) {
     std::atomic<size_t> probes_done{0};
     std::atomic<size_t> probe_failures{0};
     std::atomic<size_t> runs_dropped{0};
+    std::atomic<size_t> widened_runs{0};
+    std::atomic<size_t> runs_split{0};
     std::atomic<size_t> src_done{0};
 
     #pragma omp parallel
@@ -435,7 +442,7 @@ int main(int argc, char** argv) {
                 }
             }
         };
-        std::vector<Visit> hits_first, hits_last;
+        std::vector<Visit> hits_first, hits_last, hits_mid;
 
         #pragma omp for schedule(dynamic, 1)
         for (size_t sp = 0; sp < n_src; ++sp) {
@@ -473,7 +480,13 @@ int main(int argc, char** argv) {
             }
 
             // Emit one row for the bin run [b0, b1] on haplotype h.
-            auto emit_run = [&](uint32_t h, size_t b0, size_t b1) {
+            // Recursive: a run with no plausible anchor pairing is usually a run
+            // that spans TWO contigs of the target haplotype (assembly breaks are
+            // common, and --merge-gap happily merges across them). One target
+            // path id cannot describe it, so the run is split and each half
+            // resolved on its own rather than forced onto a single path.
+            std::function<void(uint32_t, size_t, size_t, int)> emit_run =
+                [&](uint32_t h, size_t b0, size_t b1, int depth) {
                 // The stock builder skips pairs within one haplotype; match it
                 // by default so the two tables cover the same pair set.
                 if (!allow_same_hap && h == path_hap[sp]) return;
@@ -517,16 +530,43 @@ int main(int argc, char** argv) {
                 }
                 if (hits_last.empty()) { ++probe_failures; return; }
 
+                // A third anchor from the MIDDLE of the run. Two anchors alone
+                // cannot tell a correct pairing from a pair of unrelated repeat
+                // copies that happen to share a path: both look like "same path,
+                // some displacement". Requiring the midpoint to fall between them
+                // on that same path rejects the pairing that lands the block in
+                // the wrong place — the failure that produced blocks of the right
+                // LENGTH but 90% of their shared nodes outside them.
+                hits_mid.clear();
+                if (i_last > i_first + 1) {
+                    for (size_t i = (i_first + i_last) / 2; i < i_last; ++i) {
+                        if (on_h(i)) { probe(src_nid[i], h, hits_mid); break; }
+                    }
+                }
+
                 // Pair the two anchors. Both must land on the SAME target path,
                 // and among candidate pairings prefer the one whose node-count
                 // separation best matches the source's — that is what discards
                 // an unrelated paralogous copy when a node repeats.
                 const long long want =
                     static_cast<long long>(i_last) - static_cast<long long>(i_first);
-                bool have = false;
+                // A pairing must span a comparable number of NODES to the source.
+                // Without this floor any same-path pairing was accepted, however
+                // absurd — a repeat copy giving got ~ 0 across a source run of
+                // millions of nodes produced target intervals of a single base.
+                const long long lo_ok = want / 4, hi_ok = want * 4;
+
+                bool have = false, have_strict = false;
                 size_t best_pid = 0;
                 uint64_t best_a = 0, best_b = 0;
                 long long best_cost = 0;
+                // Fallback if nothing passes: the WIDEST same-path pairing.
+                // Widening is the safe direction (a too-large block costs a
+                // traversal that returns nothing); narrowing loses real hits.
+                bool have_wide = false;
+                size_t wide_pid = 0; uint64_t wide_a = 0, wide_b = 0;
+                long long wide_span = -1;
+
                 for (const Visit& a : hits_first) {
                     for (const Visit& b : hits_last) {
                         if (a.path_id != b.path_id) continue;
@@ -535,14 +575,62 @@ int main(int argc, char** argv) {
                         // difference is the target's node displacement.
                         const long long got = static_cast<long long>(a.sa_off)
                                             - static_cast<long long>(b.sa_off);
+                        const long long mag = std::llabs(got);
+                        if (mag > wide_span) {
+                            have_wide = true; wide_span = mag;
+                            wide_pid = a.path_id; wide_a = a.sa_off; wide_b = b.sa_off;
+                        }
+                        if (want > 0 && (mag < lo_ok || mag > hi_ok)) continue;
+
+                        // Midpoint must lie between the two anchors on this same
+                        // path; if we have midpoint hits and none qualifies, this
+                        // pairing places the block somewhere the run does not go.
+                        bool mid_ok = hits_mid.empty();
+                        if (!mid_ok) {
+                            const uint64_t himark = std::max(a.sa_off, b.sa_off);
+                            const uint64_t lomark = std::min(a.sa_off, b.sa_off);
+                            for (const Visit& m : hits_mid) {
+                                if (m.path_id == a.path_id &&
+                                    m.sa_off <= himark && m.sa_off >= lomark) {
+                                    mid_ok = true; break;
+                                }
+                            }
+                        }
                         const long long cost = std::llabs(got - want);
-                        if (!have || cost < best_cost) {
+                        // Any midpoint-confirmed pairing beats every unconfirmed
+                        // one, regardless of cost.
+                        if (mid_ok) {
+                            if (!have_strict || cost < best_cost) {
+                                have = have_strict = true; best_cost = cost;
+                                best_pid = a.path_id; best_a = a.sa_off; best_b = b.sa_off;
+                            }
+                        } else if (!have_strict && (!have || cost < best_cost)) {
                             have = true; best_cost = cost;
                             best_pid = a.path_id; best_a = a.sa_off; best_b = b.sa_off;
                         }
                     }
                 }
-                if (!have) { ++probe_failures; return; }
+                // Split when the midpoint anchor exists on this haplotype but sits
+                // on none of the candidate pairings' path: that is precisely the
+                // signature of a run covering two contigs of the target. Merely
+                // preferring midpoint-confirmed pairings is not enough — when the
+                // only candidates are unconfirmed, one of them still wins and the
+                // block lands on the wrong contig.
+                const bool split_wanted = (!have_strict && !hits_mid.empty());
+                if (!have || split_wanted) {
+                    // Split before falling back: if the run really covers two
+                    // target contigs, each half can resolve cleanly on its own.
+                    if (depth < MAX_SPLIT_DEPTH && b1 > b0) {
+                        const size_t mid = b0 + (b1 - b0) / 2;
+                        ++runs_split;
+                        emit_run(h, b0, mid, depth + 1);
+                        emit_run(h, mid + 1, b1, depth + 1);
+                        return;
+                    }
+                    if (!have_wide) { ++probe_failures; return; }
+                    ++widened_runs;
+                    best_pid = wide_pid; best_a = wide_a; best_b = wide_b;
+                }
 
                 Row r;
                 r.src_path_id = sp;
@@ -572,7 +660,7 @@ int main(int argc, char** argv) {
                             if (run_open[h] && b - run_last[h] - 1 <= merge_gap_bins) {
                                 // close enough to the previous stretch: same run
                             } else {
-                                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
+                                if (run_open[h]) emit_run(h, run_start[h], run_last[h], 0);
                                 run_start[h] = static_cast<uint32_t>(b);
                             }
                             run_open[h] = 1;
@@ -594,7 +682,7 @@ int main(int argc, char** argv) {
                 }
             }
             for (uint32_t h = 0; h < H; ++h) {
-                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
+                if (run_open[h]) emit_run(h, run_start[h], run_last[h], 0);
             }
 
             if (progress) {
@@ -758,6 +846,8 @@ int main(int argc, char** argv) {
               << "  unresolved target coords:       " << with_commas(skipped) << "\n"
               << "  runs with no target anchor:     " << with_commas(probe_failures.load()) << "\n"
               << "  runs dropped by --min-run-bp:   " << with_commas(runs_dropped.load()) << "\n"
+              << "  runs widened (no plausible pair):" << with_commas(widened_runs.load()) << "\n"
+              << "  runs split (spanned 2 targets):  " << with_commas(runs_split.load()) << "\n"
               << "  decompressSA probes:            " << with_commas(probes_done.load()) << "\n"
               << "  segment source spans < 100 bp:  " << with_commas(under_100) << "\n"
               << "                       < 1 kb:    " << with_commas(under_1k) << "\n"
