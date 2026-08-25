@@ -582,18 +582,18 @@ int main(int argc, char** argv) {
                         }
                         if (want > 0 && (mag < lo_ok || mag > hi_ok)) continue;
 
-                        // Midpoint must lie between the two anchors on this same
-                        // path; if we have midpoint hits and none qualifies, this
-                        // pairing places the block somewhere the run does not go.
+                        // Midpoint confirmation is PATH membership, not positional
+                        // containment. Requiring the midpoint to fall strictly
+                        // between the anchors rejected far too much — a repeat
+                        // whose first located occurrence sits outside the span is
+                        // still on the right contig — and the resulting splits ran
+                        // away (36 M of them, and 5 M runs abandoned outright).
+                        // What actually indicates a two-contig run is the midpoint
+                        // being on a DIFFERENT path, which is checked below.
                         bool mid_ok = hits_mid.empty();
                         if (!mid_ok) {
-                            const uint64_t himark = std::max(a.sa_off, b.sa_off);
-                            const uint64_t lomark = std::min(a.sa_off, b.sa_off);
                             for (const Visit& m : hits_mid) {
-                                if (m.path_id == a.path_id &&
-                                    m.sa_off <= himark && m.sa_off >= lomark) {
-                                    mid_ok = true; break;
-                                }
+                                if (m.path_id == a.path_id) { mid_ok = true; break; }
                             }
                         }
                         const long long cost = std::llabs(got - want);
@@ -610,16 +610,19 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                // Split when the midpoint anchor exists on this haplotype but sits
-                // on none of the candidate pairings' path: that is precisely the
-                // signature of a run covering two contigs of the target. Merely
-                // preferring midpoint-confirmed pairings is not enough — when the
-                // only candidates are unconfirmed, one of them still wins and the
-                // block lands on the wrong contig.
-                const bool split_wanted = (!have_strict && !hits_mid.empty());
+                // Split only on POSITIVE evidence of a two-contig run: the
+                // midpoint is on this haplotype, but on none of the paths any
+                // candidate pairing used. Splitting merely because the midpoint
+                // was unconfirmed fired on nearly every run.
+                bool split_wanted = false;
+                if (have && !hits_mid.empty()) {
+                    bool mid_on_chosen = false;
+                    for (const Visit& m : hits_mid) {
+                        if (m.path_id == best_pid) { mid_on_chosen = true; break; }
+                    }
+                    split_wanted = !mid_on_chosen;
+                }
                 if (!have || split_wanted) {
-                    // Split before falling back: if the run really covers two
-                    // target contigs, each half can resolve cleanly on its own.
                     if (depth < MAX_SPLIT_DEPTH && b1 > b0) {
                         const size_t mid = b0 + (b1 - b0) / 2;
                         ++runs_split;
@@ -627,6 +630,10 @@ int main(int argc, char** argv) {
                         emit_run(h, mid + 1, b1, depth + 1);
                         return;
                     }
+                    // Never abandon a run that has ANY same-path pairing: a
+                    // missing entry makes translate() report "this region does not
+                    // exist", which is the false negative the whole table exists to
+                    // avoid. An over-wide block only costs a traversal.
                     if (!have_wide) { ++probe_failures; return; }
                     ++widened_runs;
                     best_pid = wide_pid; best_a = wide_a; best_b = wide_b;
