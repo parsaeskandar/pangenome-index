@@ -1128,18 +1128,14 @@ Index::translatable_haplotypes(const std::string& src_haplotype,
     // T2 is sparse — it only stores (src_path_id, tgt_haplotype) pairs that share
     // at least one graph node — so this is the homology-pruned candidate set, not
     // every haplotype in the graph.
-    std::unordered_map<size_t, std::vector<std::string>> tgts_by_src;
-    for (const std::pair<size_t, std::string>& key : table2_.keys())
-        tgts_by_src[key.first].push_back(key.second);
-
-    // Confirm each candidate actually overlaps THIS interval (a binary-searched
-    // segment lookup — still no coordinate trace).
+    // Candidates for THIS source path only. Building a map of every key in the
+    // table (what this used to do via keys()) copies one string per key — tens
+    // of millions on an all-pairs table — on every single request, which made
+    // this endpoint far slower than the translation it precedes.
     std::unordered_set<std::string> found;
     for (const PathInterval& pi : source_intervals) {
         if (pi.end <= pi.start) continue;
-        auto it = tgts_by_src.find(pi.path_id);
-        if (it == tgts_by_src.end()) continue;
-        for (const std::string& tgt : it->second) {
+        for (const std::string& tgt : table2_.target_haplotypes_for(pi.path_id)) {
             if (found.count(tgt)) continue;  // already confirmed via another segment
             std::vector<TargetInterval> hits =
                 table2_.lookup(pi.path_id, tgt, pi.start, pi.end);

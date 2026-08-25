@@ -195,7 +195,19 @@ public:
     size_t total_segments() const;
 
     /// All (src_path_id, tgt_haplotype) keys.
+    ///
+    /// WARNING: materializes one string per key. An all-pairs B2 table has tens
+    /// of millions of keys, so this is a whole-table copy — fine for offline
+    /// tools, never acceptable on a request path. Use target_haplotypes_for()
+    /// to get one source path's targets.
     std::vector<std::pair<size_t, std::string>> keys() const;
+
+    /// Target haplotype names stored for one source path.
+    ///
+    /// Keys are ordered by (src_path_id, tgt_haplotype), so one source path's
+    /// keys are contiguous and this is a binary search plus a short walk:
+    /// O(log n + k) in place of keys()'s O(n) copy of the entire table.
+    std::vector<std::string> target_haplotypes_for(size_t src_path_id) const;
 
     /// Segment list for a specific key (for inspection/debug).
     std::vector<IntervalMapping> segments(size_t src_path_id,

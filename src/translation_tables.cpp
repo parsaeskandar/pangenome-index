@@ -270,6 +270,20 @@ std::vector<std::pair<size_t, std::string>> TranslationTable2::keys() const {
     return result;
 }
 
+std::vector<std::string>
+TranslationTable2::target_haplotypes_for(size_t src_path_id) const {
+    std::vector<std::string> out;
+    // Key ordering is (src_path_id, tgt_haplotype), so seeking to the first key
+    // for this path and walking while the path id holds visits exactly the
+    // entries that belong to it.
+    Key lo{src_path_id, std::string()};
+    for (auto it = entries_.lower_bound(lo);
+         it != entries_.end() && it->first.src_path_id == src_path_id; ++it) {
+        out.push_back(it->first.tgt_haplotype);
+    }
+    return out;
+}
+
 std::vector<IntervalMapping> TranslationTable2::segments(size_t src_path_id,
                                                           const std::string& tgt_haplotype) const {
     Key k{src_path_id, tgt_haplotype};
