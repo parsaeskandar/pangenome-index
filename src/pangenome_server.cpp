@@ -1216,6 +1216,44 @@ std::vector<std::pair<char, size_t>> parse_cg_cigar(const std::string& cg) {
     return ops;
 }
 
+/// Parse a cs:Z: difference string into (op, len) pairs in CIGAR form, using
+/// '=' for matches and 'X' for mismatches so the existing walk consumes it
+/// unchanged. cs is what vg actually emits (alignment_to_gaf defaults
+/// cs_cigar=true); it never writes cg:Z:.
+///
+///   :42     42 matching bases        -> ('=', 42)
+///   *ac     mismatch, ref a, query c -> ('X', 1)
+///   +ACGT   inserted in the query    -> ('I', 4)
+///   -ACGT   deleted from the query   -> ('D', 4)
+std::vector<std::pair<char, size_t>> parse_cs_cigar(const std::string& cs) {
+    std::vector<std::pair<char, size_t>> ops;
+    size_t i = 0;
+    while (i < cs.size()) {
+        const char tok = cs[i++];
+        if (tok == ':') {
+            size_t j = i;
+            while (j < cs.size() && std::isdigit(static_cast<unsigned char>(cs[j]))) ++j;
+            if (j == i) break;
+            ops.emplace_back('=', std::stoull(cs.substr(i, j - i)));
+            i = j;
+        } else if (tok == '*') {
+            // Exactly two bases: reference then query.
+            if (i + 2 > cs.size()) break;
+            ops.emplace_back('X', 1);
+            i += 2;
+        } else if (tok == '+' || tok == '-') {
+            size_t j = i;
+            while (j < cs.size() && std::isalpha(static_cast<unsigned char>(cs[j]))) ++j;
+            if (j == i) break;
+            ops.emplace_back(tok == '+' ? 'I' : 'D', j - i);
+            i = j;
+        } else {
+            break;   // unrecognised: stop rather than misattribute
+        }
+    }
+    return ops;
+}
+
 /// Convert a GAF line into per-node SourceMappings using the path field
 /// and (preferred) the cg:Z: CIGAR. Falls back to proportional distribution
 /// of the query interval across node lengths when CIGAR is missing.
@@ -1262,21 +1300,30 @@ gaf_to_source_mappings(const std::string& gaf_str,
         node_lengths.push_back(graph.get_length(handle));
     }
 
-    // Find cg:Z: CIGAR among optional fields.
-    std::string cg_str;
+    // Find the alignment string among the optional fields. vg emits cs:Z:, so
+    // that is checked FIRST; the cg:Z: branch below predates this and never
+    // fired against giraffe output, which silently sent every alignment down
+    // the proportional-estimate fallback.
+    std::string cg_str, cs_str;
     for (size_t k = 12; k < fields.size(); ++k) {
-        if (fields[k].size() > 5 && fields[k].compare(0, 5, "cg:Z:") == 0) {
+        if (cs_str.empty() && fields[k].size() > 5 &&
+            fields[k].compare(0, 5, "cs:Z:") == 0) {
+            cs_str = fields[k].substr(5);
+        } else if (cg_str.empty() && fields[k].size() > 5 &&
+                   fields[k].compare(0, 5, "cg:Z:") == 0) {
             cg_str = fields[k].substr(5);
-            break;
         }
     }
 
     std::vector<panindexer::SourceMapping> result;
     result.reserve(path_nodes.size());
 
-    if (!cg_str.empty()) {
+    if (!cs_str.empty() || !cg_str.empty()) {
         // ── CIGAR-driven walk ─────────────────────────────────────────────
-        auto cigar_ops = parse_cg_cigar(cg_str);
+        // cs carries '=' / 'X' so matches are countable; cg's 'M' is not.
+        const bool have_matches = !cs_str.empty();
+        auto cigar_ops = have_matches ? parse_cs_cigar(cs_str)
+                                      : parse_cg_cigar(cg_str);
 
         size_t query_pos = query_start;
         size_t path_pos  = path_start;            // absolute path position
@@ -1299,6 +1346,7 @@ gaf_to_source_mappings(const std::string& gaf_str,
                                  ? (path_pos - path_node_start) : 0;
             size_t read_begin = query_pos;
             size_t path_at_node_start = path_pos;
+            size_t node_matched = 0;
 
             // Walk CIGAR until we exhaust this node or run out of ops.
             while (path_pos < path_node_end && cigar_i < cigar_ops.size()) {
@@ -1318,6 +1366,7 @@ gaf_to_source_mappings(const std::string& gaf_str,
                     steps = cigar_rem;
                 }
 
+                if (op == '=') node_matched += steps;
                 if (consumes_path)  path_pos  += steps;
                 if (consumes_query) query_pos += steps;
 
@@ -1337,6 +1386,7 @@ gaf_to_source_mappings(const std::string& gaf_str,
             sm.read_end_offset = query_pos;
             sm.node_offset_in_node = node_offset;
             sm.mapping_from_length = path_pos - path_at_node_start;
+            sm.matched_bases = have_matches ? node_matched : 0;
             result.push_back(sm);
 
             path_node_start = path_node_end;
@@ -1440,6 +1490,11 @@ Index::haplotype_coverage(const std::string& gaf_str, double min_coverage,
     // touches only a small number of paths, so this avoids walking all of them.
     std::unordered_map<size_t, std::string> pid_to_hap;
     std::unordered_map<std::string, uint64_t> covered;
+    std::unordered_map<std::string, uint64_t> matched;
+    // Matches are knowable only when the GAF carried cs:Z:. One mapping with a
+    // non-zero count proves the string was there; without it, identity is
+    // unknown rather than zero.
+    bool any_matches = false;
     std::unordered_set<std::string> here;
     uint64_t total_bp = 0;
 
@@ -1448,6 +1503,7 @@ Index::haplotype_coverage(const std::string& gaf_str, double min_coverage,
                             ? (m.read_end_offset - m.read_begin_offset) : 0;
         if (bp == 0) continue;   // pure insertion: no graph node to credit
         total_bp += bp;
+        if (m.matched_bases > 0) any_matches = true;
 
         // Which haplotypes visit this node? Count a haplotype once per node even
         // if it visits repeatedly, and accept either orientation so that
@@ -1474,7 +1530,12 @@ Index::haplotype_coverage(const std::string& gaf_str, double min_coverage,
                 here.insert(it->second);
             }
         }
-        for (const std::string& h : here) covered[h] += bp;
+        for (const std::string& h : here) {
+            covered[h] += bp;
+            // Same loop, same decompressSA result: identity for every haplotype
+            // costs nothing beyond the coverage pass already being made.
+            matched[h] += m.matched_bases;
+        }
     }
 
     if (total_bp == 0) return out;
@@ -1497,10 +1558,22 @@ Index::haplotype_coverage(const std::string& gaf_str, double min_coverage,
         hc.haplotype = kv.first;
         hc.covered_bp = kv.second;
         hc.coverage = pct;
+        if (any_matches) {
+            auto mit = matched.find(kv.first);
+            hc.matched_bp = (mit == matched.end()) ? 0 : mit->second;
+            hc.identity = 100.0 * static_cast<double>(hc.matched_bp) /
+                                  static_cast<double>(total_bp);
+            hc.has_identity = true;
+        }
         out.push_back(std::move(hc));
     }
+    // Rank by identity when it is available: it is the number that answers
+    // "how well does this haplotype match", where coverage only answers
+    // "how much of the read is present at all".
     std::sort(out.begin(), out.end(),
               [](const HaplotypeCoverage& a, const HaplotypeCoverage& b) {
+                  if (a.has_identity && b.has_identity && a.matched_bp != b.matched_bp)
+                      return a.matched_bp > b.matched_bp;
                   if (a.covered_bp != b.covered_bp) return a.covered_bp > b.covered_bp;
                   return a.haplotype < b.haplotype;   // stable, deterministic order
               });

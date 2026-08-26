@@ -1,27 +1,52 @@
 /**
- * build_translation_tables: build and store Translation Table 1 and Table 2 from a GBZ file.
+ * build_translation_tables: build Translation Table 1 and Table 2 from a GBZ.
  *
- * Table 1 maps (named_path, global_interval) → (path_id, local_interval).
- * Table 2 maps (source_path_id, target_haplotype) → sorted IntervalMapping segments.
+ * Table 1 maps (named_path, global_interval) -> (path_id, local_interval).
+ * Table 2 maps (source_path_id, target_haplotype) -> sorted segments, each
+ * naming a TARGET PATH and the source range over which that path was observed.
  *
- * Both tables are built together in two phases so that data computed for Table 1
- * (extracted paths, path lengths, base names) is reused when building Table 2.
+ * TABLE 2 IS ROUTING-ONLY, AND THAT IS DELIBERATE
+ * ----------------------------------------------
+ * Table 2 exists to answer one question for translate(): which target paths can
+ * this source range reach? The coordinates are then produced by the GBWT trace.
+ * It deliberately stores no target interval:
+ *
+ *   - Nothing in the query path reads one.
+ *   - Producing one requires pairing a run's two end anchors onto a single
+ *     target path, and that pairing is what caused misplaced blocks, five
+ *     million abandoned runs and thirty-six million run splits when it was
+ *     attempted. Routing needs no pairing and therefore cannot fail.
+ *
+ * The SOURCE RANGE per segment is what keeps queries fast, and it is not
+ * optional. Give every target path of a run the run's full source range and a
+ * query on a 150 Mb reference contig selects every target contig that run
+ * touches anywhere -- around sixteen -- and translate() pays a full
+ * find_tags_in_interval plus trace for each. Ranges derived from where each
+ * path was actually probed keep that at roughly one candidate.
+ *
+ * ALGORITHM (no pairwise path comparison: that is O(paths^2 * length))
+ *   Phase 1  Table 1, and each path's length, from one pass over every path.
+ *   Phase 2a node -> bitmask of haplotypes visiting it (atomic OR, one pass).
+ *   Phase 2b per source path: walk once, OR each node's mask into a coarse bin.
+ *   Phase 2c per source path: find runs of covered bins per haplotype with an
+ *            XOR delta between adjacent bins, merge runs closer than
+ *            --merge-gap, then probe along each run with decompressSA. Record
+ *            per target path WHICH probes saw it, as a bitmask, and emit one
+ *            segment per contiguous stretch. The stretch matters: a repeat
+ *            gives one isolated hit far from the real homology, and a plain
+ *            min/max would stretch that path across the whole run.
  *
  * Usage:
- *   build_translation_tables <graph.gbz> <output.t1> <output.t2> [options]
+ *   build_translation_tables <graph.gbz> <fastlocate.ri> <output.t1> <output.t2> [options]
  *
- * Options:
- *   --dump          Print a human-readable listing of both tables to stderr.
- *   --debug         Print verbose progress to stderr.
- *   --only-table1   Build and store only Table 1 (skip Table 2).
- *   --help          Show this help.
- *
- * See TRANSLATION_TABLES_ALGORITHM.md for full algorithm description.
+ * The r-index is required for Table 2 (decompressSA resolves target paths);
+ * pass --only-table1 to build Table 1 alone, where it is unused.
  */
 
 #include "pangenome_index/translation_tables.hpp"
 #include <sdsl/simple_sds.hpp>
 #include <gbwt/gbwt.h>
+#include <gbwt/fast_locate.h>
 #include <gbwtgraph/gbwtgraph.h>
 #include <gbwtgraph/gbz.h>
 #include <fstream>
@@ -34,6 +59,9 @@
 #include <iomanip>
 #include <omp.h>
 #include <tuple>
+#include <atomic>
+#include <cstdint>
+#include <sstream>
 
 using namespace std;
 using namespace std::chrono;
@@ -43,18 +71,29 @@ using namespace std::chrono;
 // ============================================================
 
 static void usage(const char* prog) {
-    cerr << "Usage: " << prog << " <graph.gbz> <output.t1> <output.t2> [options]" << endl;
+    cerr << "Usage: " << prog << " <graph.gbz> <fastlocate.ri> <output.t1> <output.t2> [options]" << endl;
     cerr << endl;
-    cerr << "  graph.gbz     GBZ file (GBWT index + GBWTGraph)" << endl;
-    cerr << "  output.t1     Binary Translation Table 1 output" << endl;
-    cerr << "  output.t2     Binary Translation Table 2 output" << endl;
+    cerr << "  graph.gbz       GBZ file (GBWT index + GBWTGraph)" << endl;
+    cerr << "  fastlocate.ri   GBWT FastLocate r-index (needed for Table 2)" << endl;
+    cerr << "  output.t1       Binary Translation Table 1 output" << endl;
+    cerr << "  output.t2       Binary Translation Table 2 output" << endl;
     cerr << endl;
     cerr << "Options:" << endl;
-    cerr << "  --dump          Print table contents to stderr after building" << endl;
-    cerr << "  --debug         Enable verbose progress output" << endl;
-    cerr << "  --only-table1   Build only Table 1 (skip Table 2)" << endl;
-    cerr << "  --threads N     Number of threads (default: OMP_NUM_THREADS or max)" << endl;
-    cerr << "  --help          Show this help" << endl;
+    cerr << "  --dump              Print table contents to stderr after building" << endl;
+    cerr << "  --debug             Enable verbose progress output" << endl;
+    cerr << "  --only-table1       Build only Table 1 (r-index then unused)" << endl;
+    cerr << "  --threads N         Threads (default: OMP_NUM_THREADS or max)" << endl;
+    cerr << "  --bin-size N        Coverage granularity in bp (default 10000)" << endl;
+    cerr << "  --merge-gap N       Merge runs separated by <= N bp (default 100000)" << endl;
+    cerr << "  --min-run-bp N      Drop runs shorter than N bp (default 0 = keep all)" << endl;
+    cerr << "  --probe-spacing N   One routing probe per ~N bp of run (default 1000000)." << endl;
+    cerr << "                      Lower gives finer per-path source ranges and so" << endl;
+    cerr << "                      fewer candidates per query, at more probes." << endl;
+    cerr << "  --max-probes N      Cap probes per run (default 64, hard max 64:" << endl;
+    cerr << "                      one bit per probe in the per-path bitmask)" << endl;
+    cerr << "  --allow-same-haplotype  Also pair different contigs of one haplotype" << endl;
+    cerr << "  --progress-every N  Progress line every N source paths (default 5000)" << endl;
+    cerr << "  --help              Show this help" << endl;
 }
 
 /// Build the "sample#phase#contig" base name from GBWT metadata and a PathName.
@@ -194,342 +233,402 @@ static vector<PathMetadata> build_table1_and_collect_metadata(
 }
 
 // ============================================================
-// Phase 2: Build Table 2 using PathData collected in Phase 1
+// Phase 2: Table 2 (routing) - which target paths a source range can reach
 // ============================================================
+
+/// One target path seen while probing a run, recorded as a BITMASK over probe
+/// positions. A bitmask rather than a min/max range because a repeat produces
+/// one isolated hit far from the real homology; min/max would stretch that path
+/// across the entire run and make it a candidate for every query in it.
+struct PathSpan { size_t pid; uint64_t mask; };
+
+/// A target visit found by decompressSA: which path, and where along it.
+struct Visit { size_t path_id; uint64_t sa_off; };
+
+/// One emitted Table 2 segment, before it is written.
+struct Row {
+    size_t   src_path_id;
+    uint32_t tgt_hap;      ///< index into hap_names
+    size_t   src_start;
+    size_t   src_end;
+    size_t   tgt_path_id;
+};
+
+struct Table2Params {
+    size_t bin_size       = 10000;
+    size_t merge_gap      = 100000;
+    size_t min_run_bp     = 0;
+    size_t probe_spacing  = 1000000;
+    size_t max_probes     = 64;     ///< hard max 64: one bit per probe
+    size_t progress_every = 5000;
+    bool   allow_same_hap = false;
+};
+
+static string commas(unsigned long long v) {
+    string t = to_string(v), out;
+    int c = 0;
+    for (int i = (int)t.size() - 1; i >= 0; --i) {
+        out.push_back(t[i]);
+        if (++c % 3 == 0 && i > 0) out.push_back(',');
+    }
+    reverse(out.begin(), out.end());
+    return out;
+}
 
 /**
- * For a given (src_path, tgt_path) pair, find all contiguous matching segments.
+ * Build Table 2 rows. Returns them unsorted; the caller sorts and writes.
  *
- * Strategy:
- *   Walk the src_path node by node. For each node, check if tgt_path also
- *   visits the same graph node. If it does, and it appears at the same
- *   relative position (consecutive common-node run), extend the current
- *   segment; otherwise flush the current segment and start a new one.
- *
- * This is an O(src_len * tgt_len) approach in the worst case, but in practice
- * most paths share only a small fraction of nodes, and we exit early per node.
- *
- * We use the pre-extracted tgt node list: build a map from node_id → list of
- * (tgt_node_idx, local_base_offset) for the target, then scan the source.
+ * `hap_names` is filled with the haplotype name per index, and `path_hap` maps
+ * each GBWT path id to its haplotype index.
  */
-static void find_common_segments(
-        const PathData& src,
-        const PathData& tgt,
+static vector<Row> build_table2_routing(
+        const gbwt::GBWT& gbwt_index,
         const gbwtgraph::GBWTGraph& graph,
-        panindexer::TranslationTable2& table2,
-        const string& tgt_haplotype,
-        bool debug)
+        const gbwt::Metadata& meta,
+        const gbwt::FastLocate& rindex,
+        const Table2Params& P,
+        vector<string>& hap_names,
+        vector<uint32_t>& path_hap)
 {
-    if (src.nodes.empty() || tgt.nodes.empty()) return;
+    const size_t n_paths = meta.paths();
+    path_hap.assign(n_paths, 0);
+    hap_names.clear();
+    {
+        unordered_map<string, uint32_t> seen;
+        for (size_t p = 0; p < n_paths; ++p) {
+            gbwt::PathName pn = meta.path(p);
+            string h = build_haplotype_name(meta, pn);
+            auto it = seen.find(h);
+            if (it == seen.end()) {
+                uint32_t id = (uint32_t)hap_names.size();
+                seen.emplace(h, id);
+                hap_names.push_back(h);
+                path_hap[p] = id;
+            } else {
+                path_hap[p] = it->second;
+            }
+        }
+    }
+    const size_t H = hap_names.size();
+    const size_t WORDS = (H + 63) / 64;
+    const size_t max_node = (size_t)graph.max_node_id();
 
-    // Build node_id → list of (tgt_node_idx) for the target path.
-    // We use node_id (orientation-independent) to handle potential strand flips,
-    // but we require orientation to match for a valid colinear alignment.
-    unordered_map<gbwt::node_type, vector<size_t>> tgt_node_positions;
-    tgt_node_positions.reserve(tgt.nodes.size());
-    for (size_t ti = 0; ti < tgt.nodes.size(); ++ti) {
-        if (tgt.nodes[ti] == gbwt::ENDMARKER) break;
-        tgt_node_positions[tgt.nodes[ti]].push_back(ti);
+    cerr << "  haplotypes: " << commas(H) << "   paths: " << commas(n_paths) << endl;
+    if (n_paths > 10000000) {
+        cerr << "  WARNING: " << commas(n_paths) << " paths. This looks like a"
+             << " frequency-filtered graph; Table 2 scales with path count."
+             << " Prefer the non-filtered graph." << endl;
     }
 
-    // Walk the source path and find matching target positions.
-    // We track "active segments": positions in the target where we are
-    // currently building a colinear segment with the source.
-    // Key: tgt_idx of the *next expected* tgt node; Value: (src_start, tgt_start).
-    // We only ever match each target node once, so active segments are disjoint.
+    // Node lengths: one dense array, reused by every walk. get_handle() +
+    // get_length() per node was a large part of the per-node cost.
+    cerr << "  node lengths ..." << endl;
+    vector<uint32_t> node_len(max_node + 1, 0);
+    #pragma omp parallel for schedule(static)
+    for (size_t nid = 1; nid <= max_node; ++nid) {
+        if (!graph.has_node((handlegraph::nid_t)nid)) continue;
+        node_len[nid] = (uint32_t)graph.get_length(
+            graph.get_handle((handlegraph::nid_t)nid, false));
+    }
 
-    struct ActiveSeg {
-        size_t src_start   = 0;
-        size_t tgt_start   = 0;
-        size_t tgt_idx_next = 0;  ///< index into tgt.nodes we expect next
-    };
-    // At most one active segment: guarantees no overlapping segments (same src can't map to two target runs).
-    ActiveSeg active_seg;
-    bool has_active = false;
-    size_t last_tgt_end = 0;  // only start a new run at target position >= this (avoid reusing target range)
-
-    auto flush_segment = [&](size_t src_end, size_t tgt_end, const ActiveSeg& seg) {
-        if (src_end <= seg.src_start || tgt_end <= seg.tgt_start) return;
-        panindexer::IntervalMapping im;
-        im.src_start   = seg.src_start;
-        im.src_end     = src_end;
-        im.tgt_path_id = tgt.path_id;
-        table2.add_mapping(src.path_id, tgt_haplotype, im);
-        if (debug) {
-            cerr << "    seg: src=[" << im.src_start << "," << im.src_end << ")"
-                 << " tgt_pid=" << im.tgt_path_id << endl;
-        }
-    };
-
-    for (size_t si = 0; si < src.nodes.size(); ++si) {
-        gbwt::node_type src_node = src.nodes[si];
-        if (src_node == gbwt::ENDMARKER) break;
-
-        auto tgt_it = tgt_node_positions.find(src_node);
-        size_t src_start_here = src.node_offsets[si];
-
-        // 1) If we have an active segment and the next expected target node is this source node, extend it.
-        if (has_active && active_seg.tgt_idx_next < tgt.nodes.size() &&
-            tgt.nodes[active_seg.tgt_idx_next] == src_node) {
-            active_seg.tgt_idx_next++;
-            if (active_seg.tgt_idx_next >= tgt.nodes.size()) {
-                size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-                if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-                flush_segment(src.node_offsets[si + 1], tgt_end, active_seg);
-                has_active = false;
+    // Phase 2a: node -> bitmask of haplotypes visiting it.
+    cerr << "  node->haplotype masks ("
+         << commas((max_node + 1) * WORDS * 8 / (1024 * 1024)) << " MB) ..." << endl;
+    vector<uint64_t> nodemask;
+    try {
+        nodemask.assign((max_node + 1) * WORDS, 0);
+    } catch (const std::bad_alloc&) {
+        cerr << "Error: cannot allocate the node mask. Reduce haplotypes or add RAM." << endl;
+        return {};
+    }
+    #pragma omp parallel for schedule(dynamic, 8)
+    for (size_t p = 0; p < n_paths; ++p) {
+        const uint32_t h = path_hap[p];
+        const size_t word = h / 64;
+        const uint64_t bit = 1ULL << (h % 64);
+        gbwt::vector_type nodes = gbwt_index.extract(gbwt::Path::encode(p, false));
+        for (gbwt::node_type node : nodes) {
+            if (node == gbwt::ENDMARKER) break;
+            const size_t nid = (size_t)gbwt::Node::id(node);
+            if (nid > max_node) continue;
+            uint64_t* slot = &nodemask[nid * WORDS + word];
+            // Paths of different haplotypes share nodes, so this OR races.
+            if ((__atomic_load_n(slot, __ATOMIC_RELAXED) & bit) == 0) {
+                __atomic_fetch_or(slot, bit, __ATOMIC_RELAXED);
             }
-            continue;
         }
+    }
 
-        // 2) Can't extend: flush current segment (if any) with correct length, then maybe start a new run.
-        if (has_active) {
-            size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-            if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-            size_t matched_len = tgt_end - active_seg.tgt_start;
-            size_t src_end = active_seg.src_start + matched_len;
-            flush_segment(src_end, tgt_end, active_seg);
-            has_active = false;
-        }
+    // Phases 2b/2c.
+    vector<vector<Row>> per_thread(omp_get_max_threads());
+    std::atomic<size_t> probes_done{0}, runs_dropped{0}, no_target{0}, done{0};
+    const size_t merge_gap_bins = P.merge_gap / P.bin_size;
+    auto t0 = high_resolution_clock::now();
+    cerr << "  coverage bins and routing probes ..." << endl;
 
-        // 3) Start a new segment at this position if this node appears in the target at or after last_tgt_end.
-        if (tgt_it != tgt_node_positions.end()) {
-            size_t ti_min = static_cast<size_t>(-1);  // pick smallest ti with tgt.node_offsets[ti] >= last_tgt_end
-            for (size_t ti : tgt_it->second) {
-                if (tgt.node_offsets[ti] >= last_tgt_end && (ti_min == static_cast<size_t>(-1) || ti < ti_min)) {
-                    ti_min = ti;
+    #pragma omp parallel
+    {
+        vector<Row>& out = per_thread[omp_get_thread_num()];
+        vector<uint64_t> bins;
+        vector<uint32_t> run_start(H, 0), run_last(H, 0);
+        vector<uint8_t>  run_open(H, 0);
+        vector<uint32_t> src_nid, src_off;
+        vector<Visit>    hits;
+        vector<PathSpan> seen;
+        vector<size_t>   probe_at;
+
+        // Visits of `nid` by paths of haplotype h. Only EVEN sequence ids are
+        // taken: a bidirectional GBWT stores each path twice and the reverse
+        // copy measures offsets along the reversed sequence, so restricting to
+        // the forward copy keeps one coordinate system. Probing both node
+        // orientations still finds targets traversing it the other way.
+        auto probe = [&](uint32_t nid, uint32_t h) {
+            hits.clear();
+            for (int orient = 0; orient < 2; ++orient) {
+                gbwt::node_type gn = gbwt::Node::encode((gbwt::size_type)nid, orient == 1);
+                vector<gbwt::size_type> sa = rindex.decompressSA(gn);
+                ++probes_done;
+                for (gbwt::size_type v : sa) {
+                    const gbwt::size_type sid = rindex.seqId(v);
+                    if (sid % 2 != 0) continue;
+                    const size_t pid = (size_t)sid / 2;
+                    if (pid < n_paths && path_hap[pid] == h) {
+                        hits.push_back(Visit{pid, (uint64_t)rindex.seqOffset(v)});
+                    }
                 }
             }
-            if (ti_min == static_cast<size_t>(-1)) continue;  // no valid target position
-            active_seg.src_start    = src_start_here;
-            active_seg.tgt_start    = tgt.node_offsets[ti_min];
-            active_seg.tgt_idx_next = ti_min + 1;
-            has_active = true;
-            if (active_seg.tgt_idx_next >= tgt.nodes.size()) {
-                size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-                if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-                flush_segment(src.node_offsets[si + 1], tgt_end, active_seg);
-                has_active = false;
+        };
+
+        #pragma omp for schedule(dynamic, 1)
+        for (size_t sp = 0; sp < n_paths; ++sp) {
+            // Phase 2b: one walk. Node list plus bin coverage.
+            gbwt::vector_type nodes = gbwt_index.extract(gbwt::Path::encode(sp, false));
+            src_nid.clear(); src_off.clear();
+            size_t path_len = 0;
+            for (gbwt::node_type node : nodes) {
+                if (node == gbwt::ENDMARKER) break;
+                const size_t nid = (size_t)gbwt::Node::id(node);
+                if (nid > max_node) continue;
+                src_nid.push_back((uint32_t)nid);
+                src_off.push_back((uint32_t)path_len);
+                path_len += node_len[nid];
             }
-        }
-    }
+            if (src_nid.empty() || path_len == 0) { ++done; continue; }
 
-    if (has_active) {
-        size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-        size_t matched_len = tgt_end - active_seg.tgt_start;
-        size_t src_end = active_seg.src_start + matched_len;
-        flush_segment(src_end, tgt_end, active_seg);
-    }
-}
-
-/// Same as find_common_segments but appends (src_path_id, tgt_haplotype, IntervalMapping) to out (for parallel build).
-using Table2Record = std::tuple<size_t, std::string, panindexer::IntervalMapping>;
-static void find_common_segments_to_vector(
-        const PathData& src,
-        const PathData& tgt,
-        const gbwtgraph::GBWTGraph& graph,
-        const string& tgt_haplotype,
-        vector<Table2Record>* out)
-{
-    if (src.nodes.empty() || tgt.nodes.empty() || !out) return;
-
-    unordered_map<gbwt::node_type, vector<size_t>> tgt_node_positions;
-    tgt_node_positions.reserve(tgt.nodes.size());
-    for (size_t ti = 0; ti < tgt.nodes.size(); ++ti) {
-        if (tgt.nodes[ti] == gbwt::ENDMARKER) break;
-        tgt_node_positions[tgt.nodes[ti]].push_back(ti);
-    }
-
-    struct ActiveSeg {
-        size_t src_start   = 0;
-        size_t tgt_start   = 0;
-        size_t tgt_idx_next = 0;
-    };
-    ActiveSeg active_seg;
-    bool has_active = false;
-    size_t last_tgt_end = 0;
-
-    auto flush_segment = [&](size_t src_end, size_t tgt_end, const ActiveSeg& seg) {
-        if (src_end <= seg.src_start || tgt_end <= seg.tgt_start) return;
-        panindexer::IntervalMapping im;
-        im.src_start   = seg.src_start;
-        im.src_end     = src_end;
-        im.tgt_path_id = tgt.path_id;
-        out->emplace_back(src.path_id, tgt_haplotype, im);
-    };
-
-    for (size_t si = 0; si < src.nodes.size(); ++si) {
-        gbwt::node_type src_node = src.nodes[si];
-        if (src_node == gbwt::ENDMARKER) break;
-
-        auto tgt_it = tgt_node_positions.find(src_node);
-        size_t src_start_here = src.node_offsets[si];
-
-        if (has_active && active_seg.tgt_idx_next < tgt.nodes.size() &&
-            tgt.nodes[active_seg.tgt_idx_next] == src_node) {
-            active_seg.tgt_idx_next++;
-            if (active_seg.tgt_idx_next >= tgt.nodes.size()) {
-                size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-                if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-                flush_segment(src.node_offsets[si + 1], tgt_end, active_seg);
-                has_active = false;
-            }
-            continue;
-        }
-
-        if (has_active) {
-            size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-            if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-            size_t matched_len = tgt_end - active_seg.tgt_start;
-            size_t src_end = active_seg.src_start + matched_len;
-            flush_segment(src_end, tgt_end, active_seg);
-            has_active = false;
-        }
-
-        if (tgt_it != tgt_node_positions.end()) {
-            size_t ti_min = static_cast<size_t>(-1);
-            for (size_t ti : tgt_it->second) {
-                if (tgt.node_offsets[ti] >= last_tgt_end && (ti_min == static_cast<size_t>(-1) || ti < ti_min)) {
-                    ti_min = ti;
+            const size_t nbins = (path_len + P.bin_size - 1) / P.bin_size;
+            bins.assign(nbins * WORDS, 0);
+            for (size_t i = 0; i < src_nid.size(); ++i) {
+                const uint64_t* m = &nodemask[(size_t)src_nid[i] * WORDS];
+                // Mark EVERY bin the node spans. Marking only the bin holding
+                // its start leaves the interior of any node longer than a bin
+                // uncovered, which breaks runs apart and loses real homology.
+                const size_t nlen = node_len[src_nid[i]];
+                const size_t b_lo = src_off[i] / P.bin_size;
+                const size_t b_hi = nlen > 0 ? (src_off[i] + nlen - 1) / P.bin_size : b_lo;
+                for (size_t b = b_lo; b <= b_hi && b < nbins; ++b) {
+                    uint64_t* dst = &bins[b * WORDS];
+                    for (size_t w = 0; w < WORDS; ++w) dst[w] |= m[w];
                 }
             }
-            if (ti_min == static_cast<size_t>(-1)) continue;
-            active_seg.src_start    = src_start_here;
-            active_seg.tgt_start    = tgt.node_offsets[ti_min];
-            active_seg.tgt_idx_next = ti_min + 1;
-            has_active = true;
-            if (active_seg.tgt_idx_next >= tgt.nodes.size()) {
-                size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-                if (tgt_end > last_tgt_end) last_tgt_end = tgt_end;
-                flush_segment(src.node_offsets[si + 1], tgt_end, active_seg);
-                has_active = false;
-            }
-        }
-    }
 
-    if (has_active) {
-        size_t tgt_end = tgt.node_offsets[active_seg.tgt_idx_next];
-        size_t matched_len = tgt_end - active_seg.tgt_start;
-        size_t src_end = active_seg.src_start + matched_len;
-        flush_segment(src_end, tgt_end, active_seg);
-    }
-}
+            auto emit_run = [&](uint32_t h, size_t b0, size_t b1) {
+                if (!P.allow_same_hap && h == path_hap[sp]) return;
+                size_t src_start = b0 * P.bin_size;
+                size_t src_end = min((b1 + 1) * P.bin_size, path_len);
+                if (src_end <= src_start) return;
+                // Filter on span, not bin count: a run can occupy two bins and
+                // still be far shorter than the threshold.
+                if (src_end - src_start < P.min_run_bp) { ++runs_dropped; return; }
 
-static void build_table2(
-        const gbwt::GBWT&          gbwt_index,
-        const gbwtgraph::GBWTGraph& graph,
-        const gbwt::Metadata&      meta,
-        const vector<PathMetadata>& path_meta,
-        panindexer::TranslationTable2& table2,
-        bool debug)
-{
-    // Group path_ids by contig (metadata only; no node data yet).
-    unordered_map<string, vector<size_t>> contig_to_path_ids;
-    for (size_t path_id = 0; path_id < path_meta.size(); ++path_id) {
-        const PathMetadata& pm = path_meta[path_id];
-        if (pm.length == 0) continue;
-        contig_to_path_ids[pm.contig_name].push_back(path_id);
-    }
+                const size_t word = h / 64;
+                const uint64_t bit = 1ULL << (h % 64);
+                auto on_h = [&](size_t i) {
+                    return (nodemask[(size_t)src_nid[i] * WORDS + word] & bit) != 0;
+                };
+                size_t lo = lower_bound(src_off.begin(), src_off.end(),
+                                        (uint32_t)src_start) - src_off.begin();
+                size_t hi = lower_bound(src_off.begin(), src_off.end(),
+                                        (uint32_t)src_end) - src_off.begin();
+                if (hi > src_nid.size()) hi = src_nid.size();
+                // Bin coverage means "some node here is on h", so the run's
+                // outermost nodes need not be; find ones that are.
+                size_t i_first = hi, i_last = hi;
+                for (size_t i = lo; i < hi; ++i) { if (on_h(i)) { i_first = i; break; } }
+                if (i_first >= hi) { ++no_target; return; }
+                for (size_t i = hi; i > i_first; --i) {
+                    if (on_h(i - 1)) { i_last = i - 1; break; }
+                }
+                if (i_last >= hi) i_last = i_first;
 
-    size_t total_pairs = 0;
-    for (const auto& kv : contig_to_path_ids) {
-        size_t n = kv.second.size();
-        if (n < 2) continue;
-        total_pairs += n * (n - 1);
-    }
-    cerr << "Table 2: " << contig_to_path_ids.size() << " contigs, "
-         << total_pairs << " (src, tgt) pairs to process." << endl;
+                // Probe along the run. Count scales with LENGTH: a fixed handful
+                // over a 15 Mb run leaves multi-megabase gaps, and a target
+                // contig contributing only inside a gap is never recorded --
+                // which a query landing there sees as "region does not exist".
+                size_t n_probe = (src_end - src_start) / P.probe_spacing + 1;
+                if (n_probe < 5) n_probe = 5;
+                if (n_probe > P.max_probes) n_probe = P.max_probes;
+                const size_t span_i = i_last - i_first;
+                probe_at.assign(n_probe, src_end);
+                seen.clear();
+                for (size_t k = 0; k < n_probe; ++k) {
+                    const size_t want_i =
+                        i_first + (span_i * k) / (n_probe > 1 ? n_probe - 1 : 1);
+                    for (size_t i = want_i; i <= i_last; ++i) {
+                        if (!on_h(i)) continue;
+                        probe(src_nid[i], h);
+                        probe_at[k] = src_off[i];
+                        const uint64_t kbit = 1ULL << k;
+                        for (const Visit& v : hits) {
+                            if (v.path_id == sp) continue;   // never map to itself
+                            bool found = false;
+                            for (PathSpan& ps : seen) {
+                                if (ps.pid == v.path_id) { ps.mask |= kbit; found = true; break; }
+                            }
+                            if (!found) seen.push_back(PathSpan{v.path_id, kbit});
+                        }
+                        break;
+                    }
+                }
+                if (seen.empty()) { ++no_target; return; }
 
-    size_t contig_idx = 0;
-    size_t num_contigs = contig_to_path_ids.size();
+                // One segment per maximal contiguous stretch of probes, padded
+                // by a probe interval: a path seen at one probe may extend most
+                // of the way to its neighbours, and the table must not
+                // under-cover. An isolated repeat hit stays its own small
+                // segment instead of widening the real one.
+                const size_t pad = (src_end - src_start) / n_probe + 1;
+                for (const PathSpan& ps : seen) {
+                    for (size_t k = 0; k < n_probe; ) {
+                        if (!(ps.mask & (1ULL << k))) { ++k; continue; }
+                        size_t k0 = k;
+                        while (k < n_probe && (ps.mask & (1ULL << k))) ++k;
+                        const size_t p_lo = probe_at[k0], p_hi = probe_at[k - 1];
+                        Row r;
+                        r.src_path_id = sp;
+                        r.tgt_hap     = h;
+                        r.src_start   = (p_lo > src_start + pad) ? p_lo - pad : src_start;
+                        r.src_end     = min(src_end, p_hi + pad);
+                        if (r.src_end <= r.src_start) continue;
+                        r.tgt_path_id = ps.pid;
+                        out.push_back(r);
+                    }
+                }
+            };
 
-    for (const auto& kv : contig_to_path_ids) {
-        const vector<size_t>& path_ids = kv.second;
-        if (path_ids.size() < 2) continue;
-
-        // Load only this contig's paths (peak memory = one contig's paths, not all).
-        vector<PathData> contig_paths;
-        contig_paths.reserve(path_ids.size());
-        for (size_t path_id : path_ids) {
-            contig_paths.push_back(
-                load_path_data(path_id, gbwt_index, graph, meta, path_meta[path_id]));
-        }
-
-        // Build pairs (si, ti) = indices into contig_paths; skip same haplotype.
-        vector<std::pair<size_t, size_t>> pairs;
-        for (size_t si = 0; si < contig_paths.size(); ++si) {
-            for (size_t ti = 0; ti < contig_paths.size(); ++ti) {
-                if (si == ti) continue;
-                if (contig_paths[si].haplotype_name == contig_paths[ti].haplotype_name) continue;
-                pairs.emplace_back(si, ti);
-            }
-        }
-
-        #pragma omp parallel
-        {
-            vector<Table2Record> local;
-            local.reserve(256);
-            #pragma omp for schedule(dynamic, 1)
-            for (size_t i = 0; i < pairs.size(); ++i) {
-                size_t si = pairs[i].first, ti = pairs[i].second;
-                find_common_segments_to_vector(
-                    contig_paths[si], contig_paths[ti], graph,
-                    contig_paths[ti].haplotype_name, &local);
-            }
-            #pragma omp critical
-            {
-                for (const auto& rec : local) {
-                    table2.add_mapping(std::get<0>(rec), std::get<1>(rec), std::get<2>(rec));
+            // Phase 2c: runs via XOR delta between adjacent bins, gap-merged
+            // inline so no intermediate run list is built.
+            fill(run_open.begin(), run_open.end(), 0);
+            for (size_t b = 0; b < nbins; ++b) {
+                for (size_t w = 0; w < WORDS; ++w) {
+                    const uint64_t cur  = bins[b * WORDS + w];
+                    const uint64_t prev = (b == 0) ? 0ULL : bins[(b - 1) * WORDS + w];
+                    uint64_t diff = cur ^ prev;
+                    while (diff) {
+                        const int t = __builtin_ctzll(diff);
+                        diff &= diff - 1;
+                        const uint32_t h = (uint32_t)(w * 64 + t);
+                        if (h >= H) continue;
+                        if (cur & (1ULL << t)) {
+                            if (run_open[h] && b - run_last[h] - 1 <= merge_gap_bins) {
+                                // close enough to the previous stretch: same run
+                            } else {
+                                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
+                                run_start[h] = (uint32_t)b;
+                            }
+                            run_open[h] = 1;
+                            run_last[h] = (uint32_t)b;
+                        } else if (run_open[h]) {
+                            run_last[h] = (uint32_t)(b - 1);
+                        }
+                    }
                 }
             }
-        }
+            for (size_t w = 0; w < WORDS; ++w) {
+                uint64_t bits = bins[(nbins - 1) * WORDS + w];
+                while (bits) {
+                    const int t = __builtin_ctzll(bits);
+                    bits &= bits - 1;
+                    const uint32_t h = (uint32_t)(w * 64 + t);
+                    if (h < H && run_open[h]) run_last[h] = (uint32_t)(nbins - 1);
+                }
+            }
+            for (uint32_t h = 0; h < H; ++h) {
+                if (run_open[h]) emit_run(h, run_start[h], run_last[h]);
+            }
 
-        // Discard contig_paths before next contig (free memory).
-        contig_paths.clear();
-        contig_paths.shrink_to_fit();
-
-        ++contig_idx;
-        if (contig_idx % 100 == 0 || contig_idx == num_contigs) {
-            cerr << "  Phase2: contig " << contig_idx << "/" << num_contigs << "\r" << flush;
+            const size_t d = ++done;
+            if (P.progress_every && d % P.progress_every == 0) {
+                const double el = duration_cast<milliseconds>(
+                    high_resolution_clock::now() - t0).count() / 1000.0;
+                const double rate = el > 0 ? d / el : 0;
+                #pragma omp critical
+                cerr << "    " << commas(d) << "/" << commas(n_paths) << " paths  "
+                     << fixed << setprecision(0) << el << "s  eta "
+                     << (rate > 0 ? (n_paths - d) / rate : 0) << "s  "
+                     << commas(probes_done.load()) << " probes" << endl;
+            }
         }
     }
-    cerr << endl;
 
-    table2.finalize();
-    cerr << "Table 2: " << table2.num_entries() << " (src_path, tgt_haplotype) entries, "
-         << table2.total_segments() << " total segments." << endl;
+    size_t total = 0;
+    for (const auto& v : per_thread) total += v.size();
+    vector<Row> rows;
+    rows.reserve(total);
+    for (auto& v : per_thread) {
+        rows.insert(rows.end(), v.begin(), v.end());
+        vector<Row>().swap(v);
+    }
+    cerr << "  probes: " << commas(probes_done.load())
+         << "   runs with no target: " << commas(no_target.load())
+         << "   runs dropped by --min-run-bp: " << commas(runs_dropped.load()) << endl;
+    return rows;
 }
-
-// ============================================================
-// main
-// ============================================================
 
 int main(int argc, char** argv) {
-    if (argc < 4) {
+    if (argc < 5) {
         usage(argv[0]);
         return 1;
     }
 
     string gbz_file    = argv[1];
-    string output_t1   = argv[2];
-    string output_t2   = argv[3];
+    string ri_file     = argv[2];
+    string output_t1   = argv[3];
+    string output_t2   = argv[4];
     bool dump          = false;
     bool debug         = false;
     bool only_table1   = false;
     int num_threads    = 0;  // 0 = use default (OMP_NUM_THREADS / omp_get_max_threads())
+    Table2Params P;
 
-    for (int i = 4; i < argc; ++i) {
+    for (int i = 5; i < argc; ++i) {
         string arg = argv[i];
+        auto need = [&](const char* what) -> bool {
+            if (i + 1 >= argc) { cerr << "Error: " << what << " requires a value" << endl; return false; }
+            return true;
+        };
         if      (arg == "--dump")        dump = true;
         else if (arg == "--debug")       debug = true;
         else if (arg == "--only-table1") only_table1 = true;
+        else if (arg == "--allow-same-haplotype") P.allow_same_hap = true;
         else if (arg == "--threads") {
-            if (i + 1 >= argc) { cerr << "Error: --threads requires N" << endl; return 1; }
+            if (!need("--threads")) return 1;
             num_threads = atoi(argv[++i]);
             if (num_threads < 1) num_threads = 1;
         }
+        else if (arg == "--bin-size")       { if (!need(arg.c_str())) return 1; P.bin_size = stoull(argv[++i]); }
+        else if (arg == "--merge-gap")      { if (!need(arg.c_str())) return 1; P.merge_gap = stoull(argv[++i]); }
+        else if (arg == "--min-run-bp")     { if (!need(arg.c_str())) return 1; P.min_run_bp = stoull(argv[++i]); }
+        else if (arg == "--probe-spacing")  { if (!need(arg.c_str())) return 1; P.probe_spacing = stoull(argv[++i]); }
+        else if (arg == "--max-probes")     { if (!need(arg.c_str())) return 1; P.max_probes = stoull(argv[++i]); }
+        else if (arg == "--progress-every") { if (!need(arg.c_str())) return 1; P.progress_every = stoull(argv[++i]); }
         else if (arg == "--help" || arg == "-h") { usage(argv[0]); return 0; }
         else { cerr << "Unknown argument: " << arg << endl; usage(argv[0]); return 1; }
     }
+    if (P.bin_size == 0)      { cerr << "Error: --bin-size must be > 0" << endl; return 1; }
+    if (P.probe_spacing == 0) P.probe_spacing = 1;
+    if (P.max_probes == 0)    P.max_probes = 1;
+    // One bit per probe in the per-path bitmask.
+    if (P.max_probes > 64)    P.max_probes = 64;
 
     if (num_threads > 0) {
         omp_set_num_threads(num_threads);
@@ -577,17 +676,41 @@ int main(int argc, char** argv) {
     cerr << "Phase 1 done in "
          << duration_cast<milliseconds>(t_p1_end - t_p1_start).count() << " ms." << endl;
 
-    // ---- Phase 2: Table 2 (stream by contig; load path nodes only for current contig) ----
-    panindexer::TranslationTable2 table2;
+    // ---- Phase 2: Table 2 (routing) ----
+    vector<Row> rows;
+    vector<string> hap_names;
+    vector<uint32_t> path_hap;
     if (!only_table1) {
-        cerr << "\n=== Phase 2: Building Translation Table 2 ===" << endl;
+        cerr << "\n=== Phase 2: Building Translation Table 2 (routing) ===" << endl;
         auto t_p2_start = high_resolution_clock::now();
 
-        build_table2(gbwt_index, graph, meta, path_meta, table2, debug);
+        cerr << "  loading r-index: " << ri_file << " ..." << endl;
+        gbwt::FastLocate rindex;
+        {
+            ifstream in(ri_file, ios::binary);
+            if (!in) { cerr << "Error: cannot open r-index " << ri_file << endl; return 1; }
+            rindex.load(in);
+        }
+        rindex.setGBWT(gbwt_index);
+
+        rows = build_table2_routing(gbwt_index, graph, meta, rindex, P,
+                                    hap_names, path_hap);
+
+        // Key order must match TranslationTable2's: source path id, then
+        // haplotype NAME. Interned ids follow first-seen order, not alphabetical.
+        sort(rows.begin(), rows.end(), [&](const Row& a, const Row& b) {
+            if (a.src_path_id != b.src_path_id) return a.src_path_id < b.src_path_id;
+            if (a.tgt_hap != b.tgt_hap) return hap_names[a.tgt_hap] < hap_names[b.tgt_hap];
+            if (a.src_start != b.src_start) return a.src_start < b.src_start;
+            // Tiebreaker so the file cannot depend on which thread produced a
+            // row: sort is not stable and rows arrive in thread order.
+            return a.tgt_path_id < b.tgt_path_id;
+        });
 
         auto t_p2_end = high_resolution_clock::now();
         cerr << "Phase 2 done in "
-             << duration_cast<milliseconds>(t_p2_end - t_p2_start).count() << " ms." << endl;
+             << duration_cast<milliseconds>(t_p2_end - t_p2_start).count() << " ms."
+             << "  segments: " << commas(rows.size()) << endl;
     }
 
     // ---- Dump (optional) ----
@@ -606,14 +729,11 @@ int main(int argc, char** argv) {
 
         if (!only_table1) {
             cerr << "\n=== Table 2 contents ===" << endl;
-            for (const auto& [src_pid, tgt_hap] : table2.keys()) {
-                auto segs = table2.segments(src_pid, tgt_hap);
-                cerr << "src_path=" << src_pid << " tgt_hap=\"" << tgt_hap
-                     << "\"  (" << segs.size() << " seg(s))" << endl;
-                for (const auto& seg : segs) {
-                    cerr << "  src=[" << seg.src_start << "," << seg.src_end << ")"
-                         << " tgt_pid=" << seg.tgt_path_id << endl;
-                }
+            for (const Row& r : rows) {
+                cerr << "src_path=" << r.src_path_id
+                     << " tgt_hap=\"" << hap_names[r.tgt_hap] << "\""
+                     << "  src=[" << r.src_start << "," << r.src_end << ")"
+                     << " tgt_pid=" << r.tgt_path_id << endl;
             }
         }
     }
@@ -627,13 +747,36 @@ int main(int argc, char** argv) {
     }
 
     // ---- Serialize Table 2 ----
+    // Streamed, not via TranslationTable2: an all-pairs table has tens of
+    // millions of keys and that map costs several GB of node, string and vector
+    // overhead on top of the payload.
     if (!only_table1) {
         cerr << "Writing Table 2 to: " << output_t2 << " ..." << endl;
-        {
-            ofstream out(output_t2, ios::binary);
-            if (!out) { cerr << "Error: cannot open " << output_t2 << endl; return 1; }
-            table2.serialize(out);
+        ofstream out(output_t2, ios::binary);
+        if (!out) { cerr << "Error: cannot open " << output_t2 << endl; return 1; }
+        panindexer::TranslationTable2Writer writer(out, hap_names,
+                                                   /*with_target_coords=*/false);
+        size_t keys = 0;
+        bool open_key = false;
+        size_t cur_src = 0; uint32_t cur_hap = 0;
+        for (const Row& r : rows) {
+            if (!open_key || r.src_path_id != cur_src || r.tgt_hap != cur_hap) {
+                if (!writer.begin_key(r.src_path_id, hap_names[r.tgt_hap])) {
+                    cerr << "Error: key order violated at src_path " << r.src_path_id
+                         << " hap " << hap_names[r.tgt_hap] << endl;
+                    return 1;
+                }
+                open_key = true; cur_src = r.src_path_id; cur_hap = r.tgt_hap; ++keys;
+            }
+            panindexer::IntervalMapping m;
+            m.src_start   = r.src_start;
+            m.src_end     = r.src_end;
+            m.tgt_path_id = r.tgt_path_id;
+            writer.add_segment(m);
         }
+        writer.finish();
+        cerr << "  " << commas(keys) << " keys, " << commas(rows.size())
+             << " segments." << endl;
     }
 
     auto t_end = high_resolution_clock::now();

@@ -82,6 +82,11 @@ struct SourceMapping {
     size_t read_end_offset = 0;
     /// Offset within the node where this mapping starts.
     size_t node_offset_in_node = 0;
+    /// Read bases in this mapping that MATCHED the node's sequence, from the
+    /// GAF cs:Z: string. Zero when the GAF carried no cs tag, in which case the
+    /// offsets above are estimated proportionally and match counts are unknown;
+    /// callers must not read a zero here as "nothing matched".
+    size_t matched_bases = 0;
     /// Number of bases the mapping consumes on the graph side (= path_from_length
     /// of the mapping's edits combined).
     size_t mapping_from_length = 0;

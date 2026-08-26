@@ -373,9 +373,18 @@ class PangenomeMiddleware:
                            include_zero: bool = False) -> List[Dict[str, Any]]:
         """Score every haplotype by how much of one alignment it accounts for.
 
-        Returns [{haplotype, coverage, covered_bp}, ...] sorted by descending
-        coverage, where `coverage` is a 0-100 percentage of the alignment's
-        aligned bases lying on nodes that haplotype also visits.
+        Returns [{haplotype, coverage, covered_bp, identity, matched_bp}, ...]
+        ranked best-first:
+
+          coverage  0-100, aligned read bases on nodes this haplotype visits.
+                    "How much of the sequence is present here at all."
+          identity  0-100, of those bases, the ones that also MATCHED, taken
+                    from the GAF cs:Z: string. "How much actually agrees."
+                    Always <= coverage. The key is ABSENT when the GAF had no
+                    cs string, meaning unmeasured rather than zero.
+
+        Both come from the single pass over the alignment's nodes, so scoring
+        all ~464 haplotypes costs no more than scoring one.
 
         This is a graded companion to the engine's "carried by" list: that list
         holds only haplotypes threading the read's exact allele path, so a
@@ -398,9 +407,19 @@ class PangenomeMiddleware:
             except TypeError:
                 # Extension built before include_zero existed.
                 rows = fn(gaf, float(min_coverage))
-        return [{"haplotype": r.haplotype,
-                 "coverage": round(float(r.coverage), 2),
-                 "covered_bp": int(r.covered_bp)} for r in rows]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            entry = {"haplotype": r.haplotype,
+                     "coverage": round(float(r.coverage), 2),
+                     "covered_bp": int(r.covered_bp)}
+            # identity exists only when the GAF carried a cs:Z: string. Omit the
+            # keys rather than send 0, which a client would read as "matches
+            # nothing" instead of "not measured".
+            if getattr(r, "has_identity", False):
+                entry["identity"] = round(float(r.identity), 2)
+                entry["matched_bp"] = int(r.matched_bp)
+            out.append(entry)
+        return out
 
     def get_haplotype_names(self) -> List[str]:
         """All haplotype/path names known to the coordinate index."""

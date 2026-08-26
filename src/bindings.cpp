@@ -90,6 +90,9 @@ PYBIND11_MODULE(liftover_ext, m) {
         .def(py::init<>())
         .def_readwrite("haplotype",  &HaplotypeCoverage::haplotype)
         .def_readwrite("covered_bp", &HaplotypeCoverage::covered_bp)
+        .def_readwrite("matched_bp",   &HaplotypeCoverage::matched_bp)
+        .def_readwrite("identity",     &HaplotypeCoverage::identity)
+        .def_readwrite("has_identity", &HaplotypeCoverage::has_identity)
         .def_readwrite("coverage",   &HaplotypeCoverage::coverage)
         .def("__repr__", [](const HaplotypeCoverage& h) {
             std::ostringstream ss;

@@ -12,6 +12,11 @@ Endpoints:
       optional "max_multimaps": N -> process at most N alignments per sequence
       for THIS request (<= the engine ceiling fixed by --max-multimaps at startup).
       Truncation happens before surjection, so a smaller N is genuinely cheaper.
+      each result carries "haplotype_coverage": [{haplotype, coverage,
+      covered_bp, identity, matched_bp}, ...] ranked best-first. `coverage` is
+      how much of the sequence exists on that haplotype's nodes; `identity` is
+      how much of it also matched, from the GAF cs:Z: string. `identity` is
+      absent when the aligner sent no cs string (unmeasured, not zero).
       optional "alignments_for": ["HG00097#1", ...] or "alignments_top": N ->
       each alignment gains "alignments": one surjected alignment per haplotype
       {haplotype, strand, query_start/end, target_start/end, cigar, matches,

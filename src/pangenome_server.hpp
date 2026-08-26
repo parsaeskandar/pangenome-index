@@ -24,6 +24,23 @@ struct HaplotypeCoverage {
     std::string haplotype;    ///< two-field haplotype name, e.g. "HG00097#1"
     uint64_t covered_bp = 0;  ///< aligned read bases on nodes this haplotype visits
     double coverage = 0.0;    ///< covered_bp as a percentage of aligned bases, 0..100
+    /// Aligned read bases that BOTH lie on a node this haplotype visits AND
+    /// matched there, per the GAF cs:Z: string.
+    uint64_t matched_bp = 0;
+    /// matched_bp as a percentage of aligned bases, 0..100. Always <= coverage,
+    /// since it counts a subset of the same bases; the difference is the read's
+    /// mismatch burden on this haplotype's nodes.
+    ///
+    /// NOT a surjected-alignment identity: it never checks that the shared
+    /// nodes occur on the haplotype in order, so a rearranged region can score
+    /// higher here than a colinear alignment would achieve. And it is
+    /// read-centric -- bases the read is missing consume no read positions and
+    /// so are invisible to both numerator and denominator.
+    double identity = 0.0;
+    /// False when the GAF carried no cs:Z: string, in which case matches could
+    /// not be counted and identity is 0 for want of data, not for want of
+    /// matches. Check this before showing the number.
+    bool has_identity = false;
 };
 
 struct TranslatedInterval {
