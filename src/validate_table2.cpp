@@ -82,7 +82,8 @@ void usage(const char* prog) {
         << "  --trials N   entries to sample (default 1000; 0 = all)\n"
         << "  --seed N     RNG seed (default 42)\n"
         << "  --threads N  worker threads (default: all)\n"
-        << "  --verbose    print each failing entry\n";
+        << "  --verbose    print each SEVERE entry (>=1% escaped); minor\n"
+        << "               boundary escapes are summarized, not listed\n";
 }
 
 std::string with_commas(unsigned long long v) {
@@ -300,7 +301,11 @@ int main(int argc, char** argv) {
             ratio_min = std::min(ratio_min, r.ratio);
             ratio_max = std::max(ratio_max, r.ratio);
         }
-        if (verbose && (r.escaped > 0 || !r.orientation_ok)) {
+        // Only SEVERE entries are worth printing: at 40% of entries carrying a
+        // single boundary node, listing every escape buries the real failures.
+        const bool severe_here =
+            r.escaped > 0 && !(r.shared > 0 && (100.0 * r.escaped / r.shared) < 1.0);
+        if (verbose && (severe_here || !r.orientation_ok)) {
             const auto& it = items[i];
             #pragma omp critical
             std::cerr << "  FAIL src_path=" << it.src_path << " hap=" << it.hap

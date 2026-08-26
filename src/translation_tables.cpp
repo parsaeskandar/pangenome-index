@@ -299,7 +299,12 @@ const uint32_t TABLE2_MAGIC   = 0x54543200;  // "TT2\0"
 // v3: restores them ("B2" form) and interns haplotype names, which matters
 //     because an all-pairs B2 table has one key per (source path, haplotype)
 //     and a repeated name string per key would outweigh the payload.
+// v4: interned names, NO target interval. This is the routing-only table the
+// query path actually uses; v2 expressed the same content but repeated the
+// haplotype name as a string in every key, which costs hundreds of MB across
+// tens of millions of keys.
 const uint32_t TABLE2_VERSION = 3;
+const uint32_t TABLE2_VERSION_ROUTING = 4;
 const uint32_t TABLE2_FLAG_TGT_REVERSE = 1u;
 
 }  // namespace
@@ -354,15 +359,18 @@ void TranslationTable2::load(std::istream& in) {
         throw std::runtime_error("TranslationTable2::load: invalid magic (not a Table2 file?)");
     }
     uint32_t version = read_uint32(in);
-    if (version != 1 && version != 2 && version != TABLE2_VERSION) {
+    if (version != 1 && version != 2 && version != TABLE2_VERSION &&
+        version != TABLE2_VERSION_ROUTING) {
         throw std::runtime_error("TranslationTable2::load: unsupported version");
     }
-    // v1 stored target intervals, v2 dropped them, v3 restores them.
-    has_target_coords_ = (version != 2);
+    // v1 had target intervals, v2 dropped them, v3 restored them, v4 drops them
+    // again but keeps v3's interned names.
+    has_target_coords_ = (version == 1 || version == TABLE2_VERSION);
+    const bool interned = (version >= 3);
 
     entries_.clear();
     std::vector<std::string> names;
-    if (version >= 3) {
+    if (interned) {
         uint64_t n_names = read_uint64(in);
         names.reserve(static_cast<size_t>(n_names));
         for (uint64_t i = 0; i < n_names; ++i) names.push_back(read_string(in));
@@ -372,7 +380,7 @@ void TranslationTable2::load(std::istream& in) {
     for (uint64_t i = 0; i < num_keys; ++i) {
         Key k;
         k.src_path_id = static_cast<size_t>(read_uint64(in));
-        if (version >= 3) {
+        if (interned) {
             uint32_t hid = read_uint32(in);
             if (hid >= names.size()) {
                 throw std::runtime_error("TranslationTable2::load: haplotype id out of range");
@@ -389,12 +397,12 @@ void TranslationTable2::load(std::istream& in) {
             seg.src_start   = static_cast<size_t>(read_uint64(in));
             seg.src_end     = static_cast<size_t>(read_uint64(in));
             seg.tgt_path_id = static_cast<size_t>(read_uint64(in));
-            if (version != 2) {
+            if (has_target_coords_) {
                 seg.tgt_start = static_cast<size_t>(read_uint64(in));
                 seg.tgt_end   = static_cast<size_t>(read_uint64(in));
-            }
-            if (version >= 3) {
-                seg.tgt_reverse = (read_uint32(in) & TABLE2_FLAG_TGT_REVERSE) != 0;
+                if (version >= 3) {
+                    seg.tgt_reverse = (read_uint32(in) & TABLE2_FLAG_TGT_REVERSE) != 0;
+                }
             }
             segs.push_back(seg);
         }
@@ -408,8 +416,9 @@ void TranslationTable2::load(std::istream& in) {
 // --------------------------------------------------------------------------
 
 TranslationTable2Writer::TranslationTable2Writer(
-        std::ostream& out, const std::vector<std::string>& haplotype_names)
-    : out_(out), names_(haplotype_names) {
+        std::ostream& out, const std::vector<std::string>& haplotype_names,
+        bool with_target_coords)
+    : out_(out), names_(haplotype_names), with_coords_(with_target_coords) {
     for (size_t i = 0; i < names_.size(); ++i) {
         name_ids_[names_[i]] = static_cast<uint32_t>(i);
     }
@@ -444,7 +453,7 @@ void TranslationTable2Writer::finish() {
     if (finished_) return;
     finished_ = true;
     write_uint32(out_, TABLE2_MAGIC);
-    write_uint32(out_, TABLE2_VERSION);
+    write_uint32(out_, with_coords_ ? TABLE2_VERSION : TABLE2_VERSION_ROUTING);
     write_uint64(out_, static_cast<uint64_t>(names_.size()));
     for (const std::string& n : names_) write_string(out_, n);
     write_uint64(out_, static_cast<uint64_t>(keys_.size()));
@@ -457,9 +466,11 @@ void TranslationTable2Writer::finish() {
             write_uint64(out_, static_cast<uint64_t>(seg.src_start));
             write_uint64(out_, static_cast<uint64_t>(seg.src_end));
             write_uint64(out_, static_cast<uint64_t>(seg.tgt_path_id));
-            write_uint64(out_, static_cast<uint64_t>(seg.tgt_start));
-            write_uint64(out_, static_cast<uint64_t>(seg.tgt_end));
-            write_uint32(out_, seg.tgt_reverse ? TABLE2_FLAG_TGT_REVERSE : 0u);
+            if (with_coords_) {
+                write_uint64(out_, static_cast<uint64_t>(seg.tgt_start));
+                write_uint64(out_, static_cast<uint64_t>(seg.tgt_end));
+                write_uint32(out_, seg.tgt_reverse ? TABLE2_FLAG_TGT_REVERSE : 0u);
+            }
         }
     }
 }

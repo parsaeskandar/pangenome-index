@@ -135,6 +135,13 @@ void usage(const char* prog) {
         << "  --progress-every N  progress line every N paths (default 1000)\n"
         << "  --progress      per-phase progress to stderr\n"
         << "  --no-t1         skip Table 1 (still requires the output.t1 argument)\n"
+        << "  --target-intervals  also store the TARGET interval per segment\n"
+        << "                  (file version 3). OFF by default: nothing in the\n"
+        << "                  query path reads it, and producing it requires\n"
+        << "                  pairing the run's two end anchors onto one target\n"
+        << "                  path -- the step responsible for misplaced blocks,\n"
+        << "                  abandoned runs and all the run splitting. Routing\n"
+        << "                  alone needs no pairing and cannot fail.\n"
         << "  --allow-same-haplotype  also pair different contigs of the SAME\n"
         << "                  haplotype (off by default, matching the stock\n"
         << "                  builder). A path is never mapped to itself.\n";
@@ -198,6 +205,7 @@ int main(int argc, char** argv) {
     bool progress = false;
     bool allow_same_hap = false;
     bool build_t1 = true;
+    bool want_tgt_intervals = false;
 
     {
         std::vector<std::string> pos;
@@ -213,6 +221,7 @@ int main(int argc, char** argv) {
             else if (a == "--progress") progress = true;
             else if (a == "--allow-same-haplotype") allow_same_hap = true;
             else if (a == "--no-t1") build_t1 = false;
+            else if (a == "--target-intervals") want_tgt_intervals = true;
             else if (!a.empty() && a[0] == '-') { usage(argv[0]); return 1; }
             else pos.push_back(a);
         }
@@ -400,6 +409,10 @@ int main(int argc, char** argv) {
     std::atomic<size_t> runs_dropped{0};
     std::atomic<size_t> widened_runs{0};
     std::atomic<size_t> runs_split{0};
+    // Why runs were abandoned. Only the first is benign.
+    std::atomic<size_t> fail_no_node_on_hap{0}, fail_first_unlocated{0},
+                        fail_last_unlocated{0}, fail_no_shared_path{0},
+                        fail_span_capped{0};
     std::atomic<size_t> src_done{0};
 
     #pragma omp parallel
@@ -442,7 +455,9 @@ int main(int argc, char** argv) {
                 }
             }
         };
-        std::vector<Visit> hits_first, hits_last, hits_mid;
+        std::vector<Visit> hits_first, hits_last, hits_mid, hits_probe;
+        std::vector<size_t> probe_paths[3];
+        std::vector<size_t> seen_paths;
 
         #pragma omp for schedule(dynamic, 1)
         for (size_t sp = 0; sp < n_src; ++sp) {
@@ -515,20 +530,65 @@ int main(int argc, char** argv) {
                 if (hi > src_nid.size()) hi = src_nid.size();
                 size_t i_first = hi, i_last = hi;
                 for (size_t i = lo; i < hi; ++i) { if (on_h(i)) { i_first = i; break; } }
-                if (i_first >= hi) { ++probe_failures; return; }
+                if (i_first >= hi) {
+                    // Not a loss: no node in this sub-run is on the haplotype at
+                    // all, so there is no homology here to record. Splitting
+                    // produces these routinely when the on-h nodes all land in
+                    // the other half.
+                    ++fail_no_node_on_hap; ++probe_failures; return;
+                }
                 for (size_t i = hi; i > i_first; --i) {
                     if (on_h(i - 1)) { i_last = i - 1; break; }
                 }
                 if (i_last >= hi) i_last = i_first;
 
+                if (!want_tgt_intervals) {
+                    // ROUTING ONLY. Collect every distinct target path the run
+                    // touches and emit one segment per path. There is no pairing
+                    // and therefore no way to fail, to misplace a block, or to
+                    // need a split: a run spanning two contigs simply yields two
+                    // entries, each correct.
+                    seen_paths.clear();
+                    auto add_from = [&](const std::vector<Visit>& hits) {
+                        for (const Visit& v : hits) {
+                            if (v.path_id == sp) continue;   // never map to itself
+                            if (std::find(seen_paths.begin(), seen_paths.end(),
+                                          v.path_id) == seen_paths.end()) {
+                                seen_paths.push_back(v.path_id);
+                            }
+                        }
+                    };
+                    // Sample across the run so every contig it crosses is seen.
+                    const size_t span_i = i_last - i_first;
+                    for (int frac = 0; frac <= 4; ++frac) {
+                        const size_t want_i = i_first + (span_i * frac) / 4;
+                        for (size_t i = want_i; i <= i_last; ++i) {
+                            if (on_h(i)) { probe(src_nid[i], h, hits_probe);
+                                           add_from(hits_probe); break; }
+                        }
+                    }
+                    if (seen_paths.empty()) { ++fail_no_shared_path; ++probe_failures; return; }
+                    for (size_t pid : seen_paths) {
+                        Row r;
+                        r.src_path_id = sp;
+                        r.tgt_hap     = h;
+                        r.src_start   = src_start;
+                        r.src_end     = src_end;
+                        r.tgt_path_id = pid;
+                        r.resolved    = true;   // nothing for phase D to do
+                        out.push_back(r);
+                    }
+                    return;
+                }
+
                 probe(src_nid[i_first], h, hits_first);
-                if (hits_first.empty()) { ++probe_failures; return; }
+                if (hits_first.empty()) { ++fail_first_unlocated; ++probe_failures; return; }
                 if (i_last != i_first) {
                     probe(src_nid[i_last], h, hits_last);
                 } else {
                     hits_last = hits_first;
                 }
-                if (hits_last.empty()) { ++probe_failures; return; }
+                if (hits_last.empty()) { ++fail_last_unlocated; ++probe_failures; return; }
 
                 // A third anchor from the MIDDLE of the run. Two anchors alone
                 // cannot tell a correct pairing from a pair of unrelated repeat
@@ -538,9 +598,30 @@ int main(int argc, char** argv) {
                 // the wrong place — the failure that produced blocks of the right
                 // LENGTH but 90% of their shared nodes outside them.
                 hits_mid.clear();
+                for (int i = 0; i < 3; ++i) probe_paths[i].clear();
                 if (i_last > i_first + 1) {
-                    for (size_t i = (i_first + i_last) / 2; i < i_last; ++i) {
-                        if (on_h(i)) { probe(src_nid[i], h, hits_mid); break; }
+                    // Three interior probes, not one. A single midpoint can miss
+                    // the contig boundary entirely (it may land in the half that
+                    // agrees), leaving a two-contig run undetected. Sampling at
+                    // 1/4, 1/2 and 3/4 catches a break anywhere in the middle.
+                    const size_t span = i_last - i_first;
+                    for (int frac = 1; frac <= 3; ++frac) {
+                        const size_t want_i = i_first + (span * frac) / 4;
+                        for (size_t i = want_i; i < i_last; ++i) {
+                            if (on_h(i)) {
+                                probe(src_nid[i], h, hits_probe);
+                                // Keep each probe's paths SEPARATE. Pooling them
+                                // defeats the purpose: across a contig boundary
+                                // some probe lands on each side, so a pooled set
+                                // "confirms" whichever pairing was picked.
+                                probe_paths[frac - 1].clear();
+                                for (const Visit& v : hits_probe)
+                                    probe_paths[frac - 1].push_back(v.path_id);
+                                hits_mid.insert(hits_mid.end(),
+                                                hits_probe.begin(), hits_probe.end());
+                                break;
+                            }
+                        }
                     }
                 }
 
@@ -614,8 +695,29 @@ int main(int argc, char** argv) {
                 // midpoint is on this haplotype, but on none of the paths any
                 // candidate pairing used. Splitting merely because the midpoint
                 // was unconfirmed fired on nearly every run.
+                // Positive evidence of a multi-contig run: two interior probes
+                // whose path sets are DISJOINT. One probe cannot show this, and a
+                // probe merely agreeing with the chosen pairing cannot rule it
+                // out — a run crossing a boundary has probes on both sides, so
+                // some probe always agrees.
                 bool split_wanted = false;
-                if (have && !hits_mid.empty()) {
+                for (int i = 0; i < 3 && !split_wanted; ++i) {
+                    if (probe_paths[i].empty()) continue;
+                    for (int j = i + 1; j < 3 && !split_wanted; ++j) {
+                        if (probe_paths[j].empty()) continue;
+                        bool overlap = false;
+                        for (size_t a : probe_paths[i]) {
+                            for (size_t b : probe_paths[j]) {
+                                if (a == b) { overlap = true; break; }
+                            }
+                            if (overlap) break;
+                        }
+                        if (!overlap) split_wanted = true;
+                    }
+                }
+                // Also split when the chosen pairing is on a path no interior
+                // probe saw at all.
+                if (have && !split_wanted && !hits_mid.empty()) {
                     bool mid_on_chosen = false;
                     for (const Visit& m : hits_mid) {
                         if (m.path_id == best_pid) { mid_on_chosen = true; break; }
@@ -634,7 +736,17 @@ int main(int argc, char** argv) {
                     // missing entry makes translate() report "this region does not
                     // exist", which is the false negative the whole table exists to
                     // avoid. An over-wide block only costs a traversal.
-                    if (!have_wide) { ++probe_failures; return; }
+                    // Cap the fallback. An unbounded "widest pairing" produced
+                    // blocks up to 36x their source span, which is safe but
+                    // useless as a bound. Beyond the cap, prefer no entry over a
+                    // meaningless one only if we truly cannot narrow it.
+                    if (!have_wide) {
+                        // Anchors located, but never together on one target path.
+                        ++fail_no_shared_path; ++probe_failures; return;
+                    }
+                    if (want > 0 && wide_span > hi_ok) {
+                        ++fail_span_capped; ++probe_failures; return;
+                    }
                     ++widened_runs;
                     best_pid = wide_pid; best_a = wide_a; best_b = wide_b;
                 }
@@ -726,7 +838,9 @@ int main(int argc, char** argv) {
 
     // ------------------------------- Phase D: SA offsets -> target base coords
     auto t_d = clk::now();
-    std::cerr << "Phase D: resolving target coordinates ..." << std::endl;
+    std::cerr << (want_tgt_intervals
+                  ? "Phase D: resolving target coordinates ..."
+                  : "Phase D: skipped (routing-only table)") << std::endl;
     // Group by target path so each one is walked exactly once.
     std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
         return a.tgt_path_id < b.tgt_path_id;
@@ -744,7 +858,7 @@ int main(int argc, char** argv) {
     // group count is hoisted rather than written as `g + 1 < size()`.
     const size_t n_groups = group_begin.empty() ? 0 : group_begin.size() - 1;
     #pragma omp parallel for schedule(dynamic, 1)
-    for (size_t g = 0; g < n_groups; ++g) {
+    for (size_t g = 0; g < (want_tgt_intervals ? n_groups : 0); ++g) {
         const size_t lo = group_begin[g], hi = group_begin[g + 1];
         const size_t pid = rows[lo].tgt_path_id;
 
@@ -812,7 +926,7 @@ int main(int argc, char** argv) {
     {
         std::ofstream out(out_path, std::ios::binary);
         if (!out) { std::cerr << "Error: cannot write " << out_path << "\n"; return 1; }
-        panindexer::TranslationTable2Writer writer(out, hap_names);
+        panindexer::TranslationTable2Writer writer(out, hap_names, want_tgt_intervals);
         bool key_open = false;
         size_t cur_src = 0;
         uint32_t cur_hap = 0;
@@ -849,12 +963,24 @@ int main(int argc, char** argv) {
 
     std::cout << "\n=============== B2 Table 2 ===============\n"
               << "  keys (src_path, tgt_haplotype): " << with_commas(written_keys) << "\n"
-              << "  segments (with target coords):  " << with_commas(written_segs) << "\n"
+              << (want_tgt_intervals
+                  ? "  segments (with target coords):  "
+                  : "  segments (routing only):        ")
+              << with_commas(written_segs) << "\n"
               << "  unresolved target coords:       " << with_commas(skipped) << "\n"
               << "  runs with no target anchor:     " << with_commas(probe_failures.load()) << "\n"
               << "  runs dropped by --min-run-bp:   " << with_commas(runs_dropped.load()) << "\n"
               << "  runs widened (no plausible pair):" << with_commas(widened_runs.load()) << "\n"
               << "  runs split (spanned 2 targets):  " << with_commas(runs_split.load()) << "\n"
+              << "  abandoned, by cause:\n"
+              << "    no node on that haplotype:    " << with_commas(fail_no_node_on_hap.load())
+              << "   (benign: nothing to record)\n"
+              << "    first anchor unlocated:       " << with_commas(fail_first_unlocated.load()) << "\n"
+              << "    last anchor unlocated:        " << with_commas(fail_last_unlocated.load()) << "\n"
+              << "    anchors never on one path:    " << with_commas(fail_no_shared_path.load())
+              << "   <- LOST homology\n"
+              << "    span exceeded 4x cap:         " << with_commas(fail_span_capped.load())
+              << "   <- LOST homology\n"
               << "  decompressSA probes:            " << with_commas(probes_done.load()) << "\n"
               << "  segment source spans < 100 bp:  " << with_commas(under_100) << "\n"
               << "                       < 1 kb:    " << with_commas(under_1k) << "\n"

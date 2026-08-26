@@ -251,8 +251,13 @@ public:
     /// Writes to `out`; `haplotype_names` must list every name begin_key() will
     /// use (it is interned in the file, so names cost 4 bytes per key, not a
     /// full string). Nothing is written until finish().
+    /// `with_target_coords` selects the file layout: true writes v3 (target
+    /// interval per segment), false writes the legacy v2 layout. Write v2 when
+    /// the target intervals are not populated — a v3 file of zeros would make
+    /// load() report has_target_coords() and callers believe them.
     TranslationTable2Writer(std::ostream& out,
-                            const std::vector<std::string>& haplotype_names);
+                            const std::vector<std::string>& haplotype_names,
+                            bool with_target_coords = true);
 
     /// Start a new key. Returns false if the name is not in haplotype_names or
     /// the key is not greater than the previous one.
@@ -275,6 +280,7 @@ private:
     struct KeyRec { size_t src_path_id; uint32_t hap_id; size_t first; size_t count; };
     std::vector<KeyRec> keys_;
     std::vector<IntervalMapping> segments_;
+    bool with_coords_ = true;
     bool finished_ = false;
 };
 
