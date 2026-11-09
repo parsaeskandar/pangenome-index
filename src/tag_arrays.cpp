@@ -244,7 +244,7 @@ namespace panindexer {
         out.write(reinterpret_cast<const char *>(&size), sizeof(size));
         out.write(reinterpret_cast<const char *>(encoded_runs.data()), size * sizeof(gbwt::byte_type));
 
-        cerr << "Finished serializing" << endl;
+        std::cerr << "Finished serializing" << std::endl;
     }
 
     void TagArray::serialize_run_by_run(std::ofstream& out, const std::vector<std::pair<pos_t, uint16_t>>& tag_runs) {
@@ -360,13 +360,13 @@ namespace panindexer {
             bwt_intervals_rank = sdsl::sd_vector<>::rank_1_type(&bwt_intervals);
 
 
-            cerr << "Finished deserializing" << endl;
+            std::cerr << "Finished deserializing" << std::endl;
 
         } catch (const std::bad_alloc &e) {
-            cerr << "Memory allocation failed: " << e.what() << endl;
+            std::cerr << "Memory allocation failed: " << e.what() << std::endl;
             throw;
         } catch (const std::exception &e) {
-            cerr << "Deserialization error: " << e.what() << endl;
+            std::cerr << "Deserialization error: " << e.what() << std::endl;
             throw;
         }
     }
@@ -458,7 +458,7 @@ namespace panindexer {
 
 
 
-        cerr << "Finished storing blocks" << endl;
+        std::cerr << "Finished storing blocks" << std::endl;
 
     }
 
@@ -477,7 +477,7 @@ namespace panindexer {
 //        out.close();
 
 
-        cerr << "Finished storing blocks" << endl;
+        std::cerr << "Finished storing blocks" << std::endl;
     }
 
 
@@ -489,7 +489,7 @@ namespace panindexer {
         // Seek to the start position of the current run
         in.seekg(next_block_start, std::ios::beg);
         if (in.fail()) {
-            cerr << "Failed to seek to run start position" << endl;
+            std::cerr << "Failed to seek to run start position" << std::endl;
             throw std::runtime_error("Failed to seek to run start position");
         }
 
@@ -548,7 +548,7 @@ namespace panindexer {
 
 
         if (result.second == 0) {
-            cerr << "Decoded length is 0" << endl;
+            std::cerr << "Decoded length is 0" << std::endl;
         }
         return result;
     }
