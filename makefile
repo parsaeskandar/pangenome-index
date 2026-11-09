@@ -58,7 +58,7 @@ endif
 
 # Headers and objects
 HEADERS = $(wildcard include/pangenome_index/*.hpp)
-LIBOBJS = $(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o sampled_tag_array.o translation_tables.o)
+LIBOBJS = $(addprefix $(BUILD_OBJ)/,r-index.o bplus_tree.o tag_arrays.o sampled_tag_array.o translation_tables.o)
 LIBRARY = $(BUILD_LIB)/libpanindexer.a
 
 PROGRAMS = $(addprefix $(BUILD_BIN)/,build_tags merge_tags build_rindex query_tags tags_check find_mems convert_tags print_stats build_sampled_tags query_sampled_tags coordinate_translation build_translation_tables)
