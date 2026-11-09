@@ -215,6 +215,9 @@ namespace panindexer {
     };
 
 
+    // The tree itself. All of the items are in the leaves, and the internal nodes only have keys that guide the
+    // search. The tree finds the leaf for a run, and keeps itself balanced by splitting the nodes that get full
+    // and by borrowing or merging when they get too small.
     template<typename T>
     class BplusTree {
     public:
