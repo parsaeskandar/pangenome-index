@@ -13,6 +13,7 @@ namespace panindexer {
 
     namespace {
 
+        // Do the two items have the same graph position? All gaps are the same in this sense.
         template<typename T>
         bool same_position(const T &a, const T &b) {
             return a.graph_position.value == b.graph_position.value;
@@ -20,6 +21,9 @@ namespace panindexer {
 
     }
 
+    // The node part: what happens inside one node.
+
+    // A simple scan over the items, a node only has a few of them.
     template<typename T>
     size_t bpNode<T>::search(const T &data) const {
         size_t i = 0;
@@ -29,6 +33,7 @@ namespace panindexer {
         return i;
     }
 
+    // Look for this node in the children of its parent.
     template<typename T>
     size_t bpNode<T>::find_index_in_parent() const {
         assert(parent != nullptr);
@@ -40,6 +45,8 @@ namespace panindexer {
         throw std::runtime_error("BplusTree: node not found in its parent");
     }
 
+    // A node underflows when it has less than about half of the degree. A leaf counts its items and an internal
+    // node counts its children.
     template<typename T>
     bool bpNode<T>::is_underflowing() const {
         if (leaf) {
@@ -49,6 +56,8 @@ namespace panindexer {
         }
     }
 
+    // The insert on a leaf. The run is first added to a copy of the items, and then the two ends of the leaf are
+    // checked against the leaves around it.
     template<typename T>
     bool bpNode<T>::insert(const T &data, size_t run_length, std::vector<T> &new_items) {
         assert(leaf);
@@ -76,6 +85,8 @@ namespace panindexer {
         return true;
     }
 
+    // The main part of the insertion. It finds where the run goes, rejects it if it overlaps something, and then
+    // there are four cases depending on whether it touches the run before it and the run after it.
     template<typename T>
     bool bpNode<T>::run_insert(std::vector<T> &new_items, const T &new_run, size_t run_length,
                                size_t &inserted_index) {
@@ -174,6 +185,7 @@ namespace panindexer {
         return true;
     }
 
+    // Fix the border between this leaf and the next one.
     template<typename T>
     bool bpNode<T>::merge_item_next(std::vector<T> &new_items) {
         assert(next != nullptr);
@@ -195,6 +207,7 @@ namespace panindexer {
         return true;
     }
 
+    // Fix the border between the previous leaf and this one.
     template<typename T>
     void bpNode<T>::merge_item_prev(std::vector<T> &new_items) {
         assert(prev != nullptr);
@@ -205,6 +218,9 @@ namespace panindexer {
     }
 
 
+    // The tree part: finding the leaf and keeping the tree balanced.
+
+    // The tree starts empty, the root is made at the first insert.
     template<typename T>
     BplusTree<T>::BplusTree(size_t degree) : root(nullptr), degree(degree) {
         if (degree < 5) {
@@ -217,6 +233,7 @@ namespace panindexer {
         destroy(root);
     }
 
+    // Delete a node and everything under it.
     template<typename T>
     void BplusTree<T>::destroy(bpNode<T> *node) {
         if (node == nullptr) {
@@ -228,6 +245,8 @@ namespace panindexer {
         delete node;
     }
 
+    // Find the leaf for the run and let it work out its new items. Then fix the tree: the leaf is removed if it
+    // has nothing left, split if it has too many items, and the underflows are handled.
     template<typename T>
     bool BplusTree<T>::insert(const T &data, size_t run_length) {
         if (root == nullptr) {
@@ -270,6 +289,8 @@ namespace panindexer {
         return true;
     }
 
+    // Go down to the leaf of the position and return the item just before the first one that starts after it.
+    // That item can be the last one of the previous leaf.
     template<typename T>
     T BplusTree<T>::search(size_t position) const {
         if (root == nullptr) {
@@ -288,6 +309,7 @@ namespace panindexer {
         return T::gap(0);
     }
 
+    // Walk over the leaves and count the items.
     template<typename T>
     size_t BplusTree<T>::get_bpt_size() const {
         size_t size = 0;
@@ -297,6 +319,7 @@ namespace panindexer {
         return size;
     }
 
+    // The same walk, but the gaps are not counted.
     template<typename T>
     size_t BplusTree<T>::get_bpt_run_count() const {
         size_t count = 0;
@@ -310,6 +333,7 @@ namespace panindexer {
         return count;
     }
 
+    // Go down from the root. At each internal node the keys tell which child to take.
     template<typename T>
     bpNode<T> *BplusTree<T>::leaf_search(const T &data) const {
         assert(root != nullptr);
@@ -320,6 +344,7 @@ namespace panindexer {
         return current;
     }
 
+    // The leftmost leaf, this is where the iterator starts.
     template<typename T>
     bpNode<T> *BplusTree<T>::first_leaf() const {
         bpNode<T> *current = root;
@@ -329,6 +354,7 @@ namespace panindexer {
         return current;
     }
 
+    // The old root was split, so the tree gets one level taller.
     template<typename T>
     void BplusTree<T>::new_root(bpNode<T> *left, const T &data, bpNode<T> *right) {
         bpNode<T> *node = new bpNode<T>(degree, false);
@@ -341,6 +367,8 @@ namespace panindexer {
         root = node;
     }
 
+    // Cut the items in half, link the new leaf after the old one, and give the first item of the new leaf to the
+    // parent as the key between the two.
     template<typename T>
     void BplusTree<T>::split_leaf(bpNode<T> *leaf, const std::vector<T> &items) {
         size_t mid = items.size() / 2;
@@ -363,6 +391,8 @@ namespace panindexer {
         }
     }
 
+    // Called after a split, to add the new node to the parent. If the parent is full it is split too, and this
+    // can go all the way up to the root.
     template<typename T>
     void BplusTree<T>::parent_insert(bpNode<T> *node, const T &data, bpNode<T> *child) {
         size_t add_index = node->search(data);
@@ -404,6 +434,7 @@ namespace panindexer {
         }
     }
 
+    // Take a node out of its parent. If the root is left with one child, the tree gets one level shorter.
     template<typename T>
     void BplusTree<T>::remove_from_parent(bpNode<T> *node) {
         bpNode<T> *parent = node->get_parent();
@@ -429,6 +460,8 @@ namespace panindexer {
         }
     }
 
+    // An internal node has too few children. First try to borrow one from the left sibling, then from the right
+    // one, and if they have nothing to give merge with one of them. The keys move through the parent.
     template<typename T>
     void BplusTree<T>::handle_parent_underflow(bpNode<T> *node) {
         assert(!node->is_leaf());
@@ -503,6 +536,8 @@ namespace panindexer {
         }
     }
 
+    // The same idea for a leaf. Here the items move directly between the leaves and only the key in the parent is
+    // updated.
     template<typename T>
     void BplusTree<T>::leaf_underflow(bpNode<T> *node) {
         assert(node->is_leaf());
@@ -578,6 +613,7 @@ namespace panindexer {
         print(out, root, 0);
     }
 
+    // One line per node, indented by its level in the tree.
     template<typename T>
     void BplusTree<T>::print(std::ostream &out, const bpNode<T> *node, size_t level) const {
         if (node == nullptr) {
