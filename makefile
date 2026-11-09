@@ -96,7 +96,7 @@ endif
 
 # Headers and objects
 HEADERS = $(wildcard include/pangenome_index/*.hpp)
-LIBOBJS = $(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o sampled_tag_array.o translation_tables.o surject_anchor_builder.o)
+LIBOBJS = $(addprefix $(BUILD_OBJ)/,r-index.o bplus_tree.o tag_arrays.o sampled_tag_array.o translation_tables.o surject_anchor_builder.o)
 LIBRARY = $(BUILD_LIB)/libpanindexer.a
 
 PROGRAMS = $(addprefix $(BUILD_BIN)/,build_tags merge_tags build_rindex query_tags tags_check find_mems convert_tags print_stats build_sampled_tags query_sampled_tags coordinate_translation build_translation_tables measure_table2_size build_table2_coarse validate_table2)
@@ -148,7 +148,7 @@ $(BUILD_OBJ)/coordinate_translation.pic.o: $(SOURCE_DIR)/coordinate_translation.
 	$(MY_CXX) $(CPPFLAGS) $(CXX_FLAGS) -fPIC -c -o $@ $<
 
 # Build fPIC versions of the library objects needed by the .so
-LIBOBJS_PIC = $(addprefix $(BUILD_OBJ)/,r-index.pic.o tag_arrays.pic.o sampled_tag_array.pic.o translation_tables.pic.o surject_anchor_builder.pic.o)
+LIBOBJS_PIC = $(addprefix $(BUILD_OBJ)/,r-index.pic.o bplus_tree.pic.o tag_arrays.pic.o sampled_tag_array.pic.o translation_tables.pic.o surject_anchor_builder.pic.o)
 
 $(BUILD_OBJ)/%.pic.o: $(SOURCE_DIR)/%.cpp $(HEADERS)
 	$(MY_CXX) $(CPPFLAGS) $(CXX_FLAGS) -fPIC -c -o $@ $<
