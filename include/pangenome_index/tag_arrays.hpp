@@ -54,7 +54,7 @@ namespace panindexer {
         gbwt::size_type encode_run_length(size_t offset, bool is_rev, uint16_t length, int64_t node_id);
         gbwt::size_type encode_run_length_compact(size_t offset, bool is_rev, uint16_t length, int64_t node_id);
 
-        vector<pair<pos_t, uint16_t>> get_tag_runs(){
+        std::vector<std::pair<pos_t, uint16_t>> get_tag_runs(){
             return tag_runs;
         };
 
@@ -125,7 +125,7 @@ namespace panindexer {
         sdsl::bit_vector::select_1_type encoded_runs_starts_select;
         sdsl::sd_vector<>::rank_1_type bwt_intervals_rank;
 
-        vector<pair<pos_t, uint16_t>> tag_runs;
+        std::vector<std::pair<pos_t, uint16_t>> tag_runs;
 
 
 
