@@ -374,7 +374,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                                 for (const auto &item: batches[thread_num]) {
 //                                    bptree.insert(item.first, item.second);
 //                                    bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
-                                    if (bptree.insert_success(item.first, item.second)) {
+                                    if (bptree.insert(item.first, item.second)) {
                                         bfs_queues[thread_num].push(
                                                 make_pair(item.first, item.second + item.first.start_position));
                                     }
@@ -409,7 +409,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
                                     for (const auto &item: batches[thread_num]) {
 //                                        bptree.insert(item.first, item.second);
 //                                        bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
-                                        if (bptree.insert_success(item.first, item.second)) {
+                                        if (bptree.insert(item.first, item.second)) {
                                             bfs_queues[thread_num].push(
                                                     make_pair(item.first, item.second + item.first.start_position));
                                         }
@@ -429,7 +429,7 @@ extend_kmers_bfs_parallel(GBWTGraph &graph, FastLocate &idx, BplusTree <Run> &bp
             for (const auto &item: batches[thread_num]) {
 //                bptree.insert(item.first, item.second);
 //                bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
-                if (bptree.insert_success(item.first, item.second)) {
+                if (bptree.insert(item.first, item.second)) {
                     bfs_queues[thread_num].push(make_pair(item.first, item.second + item.first.start_position));
                 }
             }

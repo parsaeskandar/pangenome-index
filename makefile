@@ -49,7 +49,7 @@ CXX_FLAGS=$(MY_CXX_FLAGS) $(PARALLEL_FLAGS) $(MY_CXX_OPT_FLAGS) -Iinclude -I$(IN
 
 HEADERS=$(wildcard include/pangenome_index/*.hpp)
 
-LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o tag_arrays.o)
+LIBOBJS=$(addprefix $(BUILD_OBJ)/,r-index.o bplus_tree.o tag_arrays.o)
 LIBRARY=$(BUILD_LIB)/libpanindexer.a
 
 
